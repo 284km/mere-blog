@@ -34,6 +34,10 @@ what this app exercises. Pain found along the way feeds back upstream; see
 - ✅ **M5**: deploy via `mere serve`. The compiled wasm runs on the host
   vendored into `.mere_host/` — the same packaged-deployment path
   mere-notes uses, now confirmed for a Postgres-backed HTTP app.
+- ✅ **M8**: single native binary. The same `app.mere` compiles via
+  `mere -c | clang` to a ~264 KB native executable — native TCP + HTTP
+  server + SHA-256, no Node, no Wasm. Drove the native full-stack runtime
+  upstream in the Mere C backend (see PAIN "native full-stack").
 - ✅ **M6**: auth + ownership. `users` table + a `User` model; `POST
   /api/signup`, `POST /api/login`, `POST /api/logout`, `GET /api/me` via
   `contrib/http/session` (cookie sessions) with `sha256_hex` password
@@ -68,6 +72,24 @@ curl -s -X DELETE localhost:8080/api/posts/1
 
 `mere serve` uses the runtime host vendored into `.mere_host/` by
 `mere install` (no compiler checkout needed at runtime).
+
+## Run as a single native binary (no Node)
+
+With a Mere toolchain that has the native full-stack runtime (native TCP +
+HTTP server + SHA-256), the whole app compiles to one native binary — no
+Node, no Wasm:
+
+```bash
+mere -c app.mere > app.c
+clang -O2 app.c -o mere-blog        # ~264 KB, statically self-contained
+./mere-blog                          # serves :8080, talks to Postgres directly
+```
+
+The C backend supplies native implementations for the `tcp_*` / `mem_*`
+(pg wire protocol over a Wasm-style byte arena), `http_serve` (a POSIX
+accept loop), and `sha256_hex` / `gen_request_id` externs. Postgres SSL
+and SCRAM password auth aren't implemented natively yet — use a
+trust-auth / plaintext connection (the dev setup above).
 
 ## Stack
 

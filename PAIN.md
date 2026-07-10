@@ -126,6 +126,32 @@ friction: the session store is a plain closed-over `map`, ownership is a
 `pw_hash`. Verified end-to-end (401 when logged out, 403 for another
 user's post, 409 on duplicate signup, cookie round-trip across requests).
 
+## Native full-stack: the app compiles to one native binary
+
+Everything above ran on Wasm + a Node host (contrib/http `http_serve`,
+contrib/db `tcp_connect`, … are host externs). Pushing the same `app.mere`
+through the C backend (`mere -c | clang`) surfaced the last frontier: the
+native backend had no sockets, no HTTP server, and no crypto, and a Mere
+`int` is 32-bit (too narrow for a 64-bit pointer, which the wire-protocol
+code assumes it can pass around as an address).
+
+Fixed upstream in the Mere C backend (native full-stack Stage 1-4):
+
+- a **Wasm-style byte arena** (`__mem`, 32-bit offsets) backing the
+  `mem_*` / `str_ptr` externs, so pg's binary wire protocol works
+  unchanged; **POSIX-socket** `tcp_*`; a **native `http_serve`** accept
+  loop; real **SHA-256** (`sha256_hex`) + `gen_request_id`.
+- **C-backend bug found & fixed**: `escape_string` emitted a raw carriage
+  return into C string literals (it handled `\n`/`\t` but not `\r`),
+  breaking any string with a CR — surfaced by compiling pg's COPY
+  unescape to C for the first time.
+
+**Result**: `mere -c app.mere | clang` → a ~264 KB binary serving the blog
+against Postgres with signup/login/logout + ownership, no Node/Wasm.
+Deferred (stubbed with a warning): Postgres **SSL** and **SCRAM** password
+auth on native — they need libssl FFI + native SCRAM crypto (use trust /
+plaintext for now).
+
 ## Positive: the typed model layer paid off at the HTTP boundary
 
 Handlers read like Rails: `post_find fd id` returns a `Post option`,
