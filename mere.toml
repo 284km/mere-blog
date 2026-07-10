@@ -6,9 +6,9 @@ version = "0.0.1"
 # dogfood a typed model layer on top of contrib/db/pg. Deps are packages
 # in the Mere compiler monorepo (subdir), pinned to a release commit.
 [dependencies]
-http = { git = "https://github.com/merelang/mere", subdir = "contrib/http", rev = "v0.1.4" }
-db   = { git = "https://github.com/merelang/mere", subdir = "contrib/db",   rev = "v0.1.4" }
-orm  = { git = "https://github.com/merelang/mere", subdir = "contrib/orm",  rev = "v0.1.4" }
+http = { git = "https://github.com/merelang/mere", subdir = "contrib/http", rev = "v0.1.5" }
+db   = { git = "https://github.com/merelang/mere", subdir = "contrib/db",   rev = "v0.1.5" }
+orm  = { git = "https://github.com/merelang/mere", subdir = "contrib/orm",  rev = "v0.1.5" }
 
 # The Node runtime host (scripts + extern glue: http_serve, tcp_connect
 # for pg, …) that runs the compiled .wasm. `mere install` vendors it into
@@ -16,4 +16,4 @@ orm  = { git = "https://github.com/merelang/mere", subdir = "contrib/orm",  rev 
 # runs the wasm on that host.
 [host]
 git = "https://github.com/merelang/mere"
-rev = "v0.1.4"
+rev = "v0.1.5"

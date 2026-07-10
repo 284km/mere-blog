@@ -75,9 +75,8 @@ curl -s -X DELETE localhost:8080/api/posts/1
 
 ## Run as a single native binary (no Node)
 
-With a Mere toolchain that has the native full-stack runtime (native TCP +
-HTTP server + SHA-256), the whole app compiles to one native binary — no
-Node, no Wasm:
+With Mere ≥ v0.1.5 (native full-stack: native TCP + HTTP server +
+SHA-256), the whole app compiles to one native binary — no Node, no Wasm:
 
 ```bash
 mere -c app.mere > app.c
