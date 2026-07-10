@@ -12,21 +12,26 @@ Status legend: 🔴 open · 🟡 worked around · 🟢 fixed upstream
 
 ---
 
-## B1 🟡 `let main = …` silently collides with the synthesized module entry
+## B1 🟢 `let main = …` collided with the synthesized entry (diagnostic fixed upstream)
 
 The program's trailing top-level expression compiles to a Wasm `$main`
 export. Naming a top-level binding `let main = fn () -> …` also emits
-`$main`, so the module has two — but `mere -w` reports nothing; the clash
-only surfaces from `wat2wasm`:
+`$main`, so the module has two — and `mere -w` reported nothing; the clash
+only surfaced from `wat2wasm`:
 
 ```
 error: redefinition of function "$main"
 ```
 
-Worked around by renaming the entry function to `run`. **Signal:** the
-compiler should either reject a user `main` binding with a clear message
-or namespace user bindings away from the synthesized entry — surfacing a
-codegen name clash through a downstream tool is a poor diagnostic.
+Worked around by renaming the entry function to `run`.
+
+**Fixed upstream (mere `6a12b06`):** it turned out a reserved-name warning
+existed but only fired on the *interp* path, not the compile paths
+(`-c` / `-ll` / `-w`) where the clash actually bites — so the compile
+paths now run it too, and `main` gets a purpose-specific message ("reserved
+for the program entry point … rename this binding") instead of the generic
+"collides with a libc symbol" line. The clash is now caught at `mere -w`
+with a clear message rather than downstream in `wat2wasm`.
 
 ## B2 🟢 Backends couldn't destructure a constructor/record in `let` (fixed upstream)
 
