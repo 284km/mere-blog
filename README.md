@@ -34,10 +34,16 @@ what this app exercises. Pain found along the way feeds back upstream; see
 - ✅ **M5**: deploy via `mere serve`. The compiled wasm runs on the host
   vendored into `.mere_host/` — the same packaged-deployment path
   mere-notes uses, now confirmed for a Postgres-backed HTTP app.
+- ✅ **M6**: auth + ownership. `users` table + a `User` model; `POST
+  /api/signup`, `POST /api/login`, `POST /api/logout`, `GET /api/me` via
+  `contrib/http/session` (cookie sessions) with `sha256_hex` password
+  hashing. Posts record their `author`; creating a post requires login,
+  and only the author may update/delete their own (403 otherwise).
 
-Endpoints: `GET /`, `GET /api/posts`, `GET /api/posts/:id`,
-`POST /api/posts`, `PUT /api/posts/:id`, `DELETE /api/posts/:id`,
-`POST /api/posts/:id/comments`.
+Endpoints: `GET /`, `POST /api/signup`, `POST /api/login`,
+`POST /api/logout`, `GET /api/me`, `GET /api/posts`, `GET /api/posts/:id`,
+`POST /api/posts` (auth), `PUT /api/posts/:id` (author only),
+`DELETE /api/posts/:id` (author only), `POST /api/posts/:id/comments`.
 
 ## Run the server
 

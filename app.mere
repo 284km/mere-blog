@@ -18,11 +18,23 @@ import "model.mere";
 import "http/http.mere";
 import "http/router.mere";
 import "http/json_body.mere";
+import "http/session.mere";
 
 // One connection for the process — the Node host is single-threaded, so a
 // single fd is enough for a demo (a pool would be the next step).
 let fd = pg_connect "127.0.0.1" 15499 "postgres" "" "blog";
 let _ = if fd < 1 then print "WARN: pg connect failed" else print "pg connected";
+
+// In-memory session store (sid -> username). Cleared on restart; a
+// sessions table would be the symmetric follow-up.
+let sessions = session_new_store ();
+
+// Password hashing. sha256_hex is a host extern (contrib/db uses it for
+// SCRAM). Demo-grade: a fixed pepper, no per-user salt or key stretching —
+// a real app would use a slow salted KDF. Good enough to exercise the
+// signup/login/session flow.
+extern fn sha256_hex: str -> str;
+let hash_pw = fn (p: str) -> sha256_hex ("mere-blog::pepper::" ++ p);
 
 // --- JSON building from typed records ------------------------------------
 //
@@ -32,10 +44,18 @@ let _ = if fd < 1 then print "WARN: pg connect failed" else print "pg connected"
 let post_json = fn (p: Post) ->
   enc_obj (
     Cons (("id", enc_int p.id),
+    Cons (("author", enc_str p.author),
     Cons (("title", enc_str p.title),
     Cons (("body", enc_str p.body),
     Cons (("published", enc_bool p.published),
-    Cons (("created_at", enc_str p.created_at), Nil))))))
+    Cons (("created_at", enc_str p.created_at), Nil)))))))
+  ;
+
+// User JSON never includes pw_hash.
+let user_json = fn (u: User) ->
+  enc_obj (
+    Cons (("id", enc_int u.id),
+    Cons (("username", enc_str u.username), Nil)))
   ;
 
 let comment_json = fn (c: Comment) ->
@@ -68,6 +88,54 @@ let _first_cap = fn (caps: str list) ->
   | Cons (h, _) -> h
   ;
 
+let _unauthorized = fn (u: unit) ->
+  let _ = http_set_status 401 in "login required\n"
+  ;
+
+// --- auth handlers --------------------------------------------------------
+
+let signup_h = fn (req: str) ->
+  let username = body_field "username" in
+  let password = body_field "password" in
+  if str_eq username "" || str_eq password "" then
+    let _ = http_set_status 400 in "username and password required\n"
+  else
+    match user_find_by_name fd username with
+    | Some _ -> let _ = http_set_status 409 in "username taken\n"
+    | None ->
+      match user_create fd username (hash_pw password) with
+      | None -> let _ = http_set_status 500 in "signup failed\n"
+      | Some u ->
+        let _ = session_login sessions u.username in
+        let _ = http_set_status 201 in json_ok (user_json u)
+  ;
+
+let login_h = fn (req: str) ->
+  let username = body_field "username" in
+  let password = body_field "password" in
+  match user_find_by_name fd username with
+  | None -> let _ = http_set_status 401 in "invalid credentials\n"
+  | Some u ->
+    if str_eq u.pw_hash (hash_pw password) then
+      let _ = session_login sessions u.username in json_ok (user_json u)
+    else
+      let _ = http_set_status 401 in "invalid credentials\n"
+  ;
+
+let logout_h = fn (req: str) ->
+  let _ = session_logout sessions in
+  json_ok (enc_obj (Cons (("ok", enc_bool true), Nil)))
+  ;
+
+let me_h = fn (req: str) ->
+  let username = session_current sessions in
+  if str_eq username "" then _unauthorized ()
+  else
+    match user_find_by_name fd username with
+    | None -> _unauthorized ()
+    | Some u -> json_ok (user_json u)
+  ;
+
 // --- handlers -------------------------------------------------------------
 
 let posts_index_h = fn (req: str) ->
@@ -86,15 +154,18 @@ let post_show_h = fn (caps: str list) -> fn (req: str) ->
   ;
 
 let post_create_h = fn (req: str) ->
-  let title = body_field "title" in
-  let body = body_field "body" in
-  let published = str_eq (body_field "published") "true" in
-  if str_eq title "" then
-    let _ = http_set_status 400 in "title required\n"
+  let user = session_current sessions in
+  if str_eq user "" then _unauthorized ()
   else
-    match post_create fd title body published with
-    | None -> let _ = http_set_status 500 in "create failed\n"
-    | Some p -> let _ = http_set_status 201 in json_ok (post_json p)
+    let title = body_field "title" in
+    let body = body_field "body" in
+    let published = str_eq (body_field "published") "true" in
+    if str_eq title "" then
+      let _ = http_set_status 400 in "title required\n"
+    else
+      match post_create fd user title body published with
+      | None -> let _ = http_set_status 500 in "create failed\n"
+      | Some p -> let _ = http_set_status 201 in json_ok (post_json p)
   ;
 
 let comment_create_h = fn (caps: str list) -> fn (req: str) ->
@@ -109,25 +180,44 @@ let comment_create_h = fn (caps: str list) -> fn (req: str) ->
     | Some c -> let _ = http_set_status 201 in json_ok (comment_json c)
   ;
 
+// Update / delete require login AND ownership: only a post's own author
+// may mutate it. Look the post up first so we can compare authors and
+// distinguish 404 (no such post) from 403 (someone else's).
 let post_update_h = fn (caps: str list) -> fn (req: str) ->
-  let id = parse_int_or_zero (_first_cap caps) in
-  let title = body_field "title" in
-  let body = body_field "body" in
-  let published = str_eq (body_field "published") "true" in
-  if str_eq title "" then
-    let _ = http_set_status 400 in "title required\n"
+  let user = session_current sessions in
+  if str_eq user "" then _unauthorized ()
   else
-    match post_update fd id title body published with
+    let id = parse_int_or_zero (_first_cap caps) in
+    match post_find fd id with
     | None -> let _ = http_set_status 404 in "post not found\n"
-    | Some p -> json_ok (post_json p)
+    | Some existing ->
+      if str_eq existing.author user then
+        let title = body_field "title" in
+        let body = body_field "body" in
+        let published = str_eq (body_field "published") "true" in
+        if str_eq title "" then
+          let _ = http_set_status 400 in "title required\n"
+        else
+          (match post_update fd id title body published with
+           | None -> let _ = http_set_status 404 in "post not found\n"
+           | Some p -> json_ok (post_json p))
+      else
+        let _ = http_set_status 403 in "not your post\n"
   ;
 
 let post_delete_h = fn (caps: str list) -> fn (req: str) ->
-  let id = parse_int_or_zero (_first_cap caps) in
-  if post_delete fd id then
-    let _ = http_set_status 204 in ""
+  let user = session_current sessions in
+  if str_eq user "" then _unauthorized ()
   else
-    let _ = http_set_status 404 in "post not found\n"
+    let id = parse_int_or_zero (_first_cap caps) in
+    match post_find fd id with
+    | None -> let _ = http_set_status 404 in "post not found\n"
+    | Some existing ->
+      if str_eq existing.author user then
+        let _ = post_delete fd id in
+        let _ = http_set_status 204 in ""
+      else
+        let _ = http_set_status 403 in "not your post\n"
   ;
 
 // A tiny HTML index so `GET /` is human-friendly (the Rails feel).
@@ -154,13 +244,17 @@ let not_found = fn (req: str) ->
 
 let routes =
   Cons (route "GET" "/" index_h,
+  Cons (route "POST" "/api/signup" signup_h,
+  Cons (route "POST" "/api/login" login_h,
+  Cons (route "POST" "/api/logout" logout_h,
+  Cons (route "GET" "/api/me" me_h,
   Cons (route "GET" "/api/posts" posts_index_h,
   Cons (route_pattern "GET" "/api/posts/:id" post_show_h,
   Cons (route "POST" "/api/posts" post_create_h,
   Cons (route_pattern "PUT" "/api/posts/:id" post_update_h,
   Cons (route_pattern "DELETE" "/api/posts/:id" post_delete_h,
   Cons (route_pattern "POST" "/api/posts/:id/comments" comment_create_h,
-  Nil)))))));
+  Nil)))))))))));
 
 let handle = router routes not_found;
 let _ = print "mere-blog serving on :8080";

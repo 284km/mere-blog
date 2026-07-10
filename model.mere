@@ -9,6 +9,7 @@ import "orm.mere";
 
 type Post = {
   id: int,
+  author: str,
   title: str,
   body: str,
   published: bool,
@@ -23,16 +24,30 @@ type Comment = {
   created_at: str
 };
 
+type User = {
+  id: int,
+  username: str,
+  pw_hash: str
+};
+
 // --- row builders (column order must match the SELECT list) --------------
 
 let post_of_row = fn (row: str option list) ->
   let (id, r1) = dec_int row in
-  let (title, r2) = dec_str r1 in
-  let (body, r3) = dec_str r2 in
-  let (published, r4) = dec_bool r3 in
-  let (created_at, _) = dec_str r4 in
-  Post { id = id, title = title, body = body,
+  let (author, r2) = dec_str r1 in
+  let (title, r3) = dec_str r2 in
+  let (body, r4) = dec_str r3 in
+  let (published, r5) = dec_bool r4 in
+  let (created_at, _) = dec_str r5 in
+  Post { id = id, author = author, title = title, body = body,
          published = published, created_at = created_at }
+  ;
+
+let user_of_row = fn (row: str option list) ->
+  let (id, r1) = dec_int row in
+  let (username, r2) = dec_str r1 in
+  let (pw_hash, _) = dec_str r2 in
+  User { id = id, username = username, pw_hash = pw_hash }
   ;
 
 let comment_of_row = fn (row: str option list) ->
@@ -45,8 +60,9 @@ let comment_of_row = fn (row: str option list) ->
             body = body, created_at = created_at }
   ;
 
-let _post_cols = "id, title, body, published, created_at";
+let _post_cols = "id, author, title, body, published, created_at";
 let _comment_cols = "id, post_id, author, body, created_at";
+let _user_cols = "id, username, pw_hash";
 
 // --- Post queries ---------------------------------------------------------
 
@@ -67,14 +83,15 @@ let post_find = fn (fd: int) -> fn (id: int) ->
     (Cons (Some (show id), Nil)))
   ;
 
-let post_create = fn (fd: int) -> fn (title: str) -> fn (body: str)
-              -> fn (published: bool) ->
+let post_create = fn (fd: int) -> fn (author: str) -> fn (title: str)
+              -> fn (body: str) -> fn (published: bool) ->
   insert_returning post_of_row fd
-    ("INSERT INTO posts (title, body, published) VALUES ($1, $2, $3) \
+    ("INSERT INTO posts (author, title, body, published) VALUES ($1, $2, $3, $4) \
       RETURNING " ++ _post_cols)
-    (Cons (Some title,
+    (Cons (Some author,
+     Cons (Some title,
      Cons (Some body,
-     Cons (Some (if published then "true" else "false"), Nil))))
+     Cons (Some (if published then "true" else "false"), Nil)))))
   ;
 
 let post_update = fn (fd: int) -> fn (id: int) -> fn (title: str)
@@ -113,4 +130,19 @@ let comment_create = fn (fd: int) -> fn (post_id: int) -> fn (author: str)
     (Cons (Some (show post_id),
      Cons (Some author,
      Cons (Some body, Nil))))
+  ;
+
+// --- User queries ----------------------------------------------------------
+
+let user_find_by_name = fn (fd: int) -> fn (username: str) ->
+  head_opt (query_as user_of_row fd
+    ("SELECT " ++ _user_cols ++ " FROM users WHERE username = $1")
+    (Cons (Some username, Nil)))
+  ;
+
+let user_create = fn (fd: int) -> fn (username: str) -> fn (pw_hash: str) ->
+  insert_returning user_of_row fd
+    ("INSERT INTO users (username, pw_hash) VALUES ($1, $2) \
+      RETURNING " ++ _user_cols)
+    (Cons (Some username, Cons (Some pw_hash, Nil)))
   ;

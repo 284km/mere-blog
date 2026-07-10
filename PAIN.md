@@ -90,6 +90,29 @@ json_body) with the typed model layer had **zero friction** — routing,
 path-param captures, and body parsing all fit together cleanly on the
 first try.
 
+## B4 🟡 No list literal — deep `Cons (…, Cons (…, Nil))` nesting is error-prone
+
+Route tables, SQL batches, decoder chains, and JSON field lists are all
+built by hand-nesting `Cons`. There's no `[a, b, c]` sugar, so an 11-route
+table ends in `Nil)))))))))));` and a miscount (5 closing parens for 6
+`Cons`) is easy to make. Worse, the parse error is reported deep *inside*
+an unrelated string literal several lines up ("expected ')' in tuple"),
+not at the actual paren site — so the diagnostic points nowhere near the
+mistake. **Signal:** list-literal syntax (`[a, b, c]` desugaring to
+`Cons`/`Nil`) would remove the whole class of miscounts, and even without
+it, a friendlier unbalanced-paren diagnostic would help.
+
+## Positive: session/cookie auth composed cleanly
+
+M6 added signup / login / logout / me + per-post ownership on top of
+`contrib/http/session` (session_new_store / session_current /
+session_login / session_logout) and the `sha256_hex` host extern, with a
+`User` model in the typed layer. It came together without new language
+friction: the session store is a plain closed-over `map`, ownership is a
+`str_eq post.author current_user` check, and `user_json` simply omits
+`pw_hash`. Verified end-to-end (401 when logged out, 403 for another
+user's post, 409 on duplicate signup, cookie round-trip across requests).
+
 ## Positive: the typed model layer paid off at the HTTP boundary
 
 Handlers read like Rails: `post_find fd id` returns a `Post option`,
