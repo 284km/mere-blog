@@ -83,3 +83,50 @@ let exec = fn (fd: int) -> fn (sql: str) -> fn (params: str option list) ->
   let _ = pg_query_params fd sql params in
   ()
   ;
+
+// --- JSON encoding (the mirror of the row decoders) ----------------------
+//
+// The typed models produce records; turning a record into JSON was the
+// other half of the "no reflection" problem (PAIN B3) — every handler used
+// to hand-roll escaping + field concatenation. These combinators centralize
+// it: value encoders produce a JSON fragment, and enc_obj / enc_arr build
+// structure. A model writes `enc_obj (Cons (("id", enc_int p.id), …))`.
+
+let _json_esc_char = fn (c: str) ->
+  if str_eq c "\"" then "\\\""
+  else if str_eq c "\\" then "\\\\"
+  else c
+  ;
+
+let rec _je = fn (s: str) -> fn (i: int) -> fn (n: int) -> fn (acc: str) ->
+  if i >= n then acc else _je s (i + 1) n (acc ++ _json_esc_char (char_at s i))
+  ;
+
+// value encoders → a JSON fragment string.
+let enc_str = fn (s: str) -> "\"" ++ _je s 0 (str_len s) "" ++ "\"";
+let enc_int = fn (n: int) -> show n;
+let enc_bool = fn (b: bool) -> if b then "true" else "false";
+let enc_str_opt = fn (o: str option) ->
+  match o with
+  | None -> "null"
+  | Some s -> enc_str s
+  ;
+
+// enc_obj: build a JSON object from (key, encoded-value) pairs.
+let rec _obj_fields = fn (fs: (str * str) list) -> fn (first: bool) -> fn (acc: str) ->
+  match fs with
+  | Nil -> acc ++ "}"
+  | Cons (kv, rest) ->
+    let (k, v) = kv in
+    _obj_fields rest false (acc ++ (if first then "" else ",") ++ enc_str k ++ ":" ++ v)
+  ;
+let enc_obj = fn (fs: (str * str) list) -> _obj_fields fs true "\{";
+
+// enc_arr: build a JSON array from already-encoded fragments.
+let rec _arr_items = fn (xs: str list) -> fn (first: bool) -> fn (acc: str) ->
+  match xs with
+  | Nil -> acc ++ "]"
+  | Cons (x, rest) ->
+    _arr_items rest false (acc ++ (if first then "" else ",") ++ x)
+  ;
+let enc_arr = fn (xs: str list) -> _arr_items xs true "[";

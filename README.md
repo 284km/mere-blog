@@ -21,10 +21,20 @@ what this app exercises. Pain found along the way feeds back upstream; see
   creates a post, lists typed `Post` records, adds and lists typed
   `Comment`s — SQL and raw rows stay behind the model functions.
 - ✅ **M2**: HTTP layer. `app.mere` serves the blog over HTTP via
-  `contrib/http` (router + json body): `GET /` (HTML index), `GET
-  /api/posts`, `GET /api/posts/:id` (post + comments), `POST /api/posts`,
-  `POST /api/posts/:id/comments`. JSON is built from the typed records, so
-  the model layer keeps the handlers thin.
+  `contrib/http` (router + json body). JSON is built from the typed
+  records, so the model layer keeps the handlers thin.
+- ✅ **M3**: full CRUD. `PUT /api/posts/:id` (update) and `DELETE
+  /api/posts/:id` (204 / 404) added, backed by `post_update` /
+  `post_delete` (UPDATE / DELETE … RETURNING).
+- ✅ **M4**: JSON encoder combinators. `orm.mere` gains `enc_int` /
+  `enc_str` / `enc_bool` / `enc_str_opt` + `enc_obj` / `enc_arr` — the
+  mirror of the row decoders. Handlers encode records with
+  `enc_obj (Cons (("id", enc_int p.id), …))` instead of hand-rolled string
+  concatenation; escaping is centralized.
+
+Endpoints: `GET /`, `GET /api/posts`, `GET /api/posts/:id`,
+`POST /api/posts`, `PUT /api/posts/:id`, `DELETE /api/posts/:id`,
+`POST /api/posts/:id/comments`.
 
 ## Run the server
 

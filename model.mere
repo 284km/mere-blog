@@ -77,6 +77,26 @@ let post_create = fn (fd: int) -> fn (title: str) -> fn (body: str)
      Cons (Some (if published then "true" else "false"), Nil))))
   ;
 
+let post_update = fn (fd: int) -> fn (id: int) -> fn (title: str)
+              -> fn (body: str) -> fn (published: bool) ->
+  insert_returning post_of_row fd
+    ("UPDATE posts SET title = $1, body = $2, published = $3 WHERE id = $4 \
+      RETURNING " ++ _post_cols)
+    (Cons (Some title,
+     Cons (Some body,
+     Cons (Some (if published then "true" else "false"),
+     Cons (Some (show id), Nil)))))
+  ;
+
+// Returns true if a row was deleted (RETURNING id yields one row), false
+// if no post had that id.
+let post_delete = fn (fd: int) -> fn (id: int) ->
+  match pg_query_params fd "DELETE FROM posts WHERE id = $1 RETURNING id"
+          (Cons (Some (show id), Nil)) with
+  | Nil -> false
+  | Cons (_, _) -> true
+  ;
+
 // --- Comment queries -------------------------------------------------------
 
 let comments_for = fn (fd: int) -> fn (post_id: int) ->

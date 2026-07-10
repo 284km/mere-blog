@@ -25,51 +25,36 @@ let fd = pg_connect "127.0.0.1" 15499 "postgres" "" "blog";
 let _ = if fd < 1 then print "WARN: pg connect failed" else print "pg connected";
 
 // --- JSON building from typed records ------------------------------------
-
-let _json_esc_char = fn (c: str) ->
-  if str_eq c "\"" then "\\\""
-  else if str_eq c "\\" then "\\\\"
-  else c
-  ;
-
-let rec _je = fn (s: str) -> fn (i: int) -> fn (n: int) -> fn (acc: str) ->
-  if i >= n then acc else _je s (i + 1) n (acc ++ _json_esc_char (char_at s i))
-  ;
-
-// a JSON string literal (quoted + escaped).
-let jstr = fn (s: str) -> "\"" ++ _je s 0 (str_len s) "" ++ "\"";
+//
+// Uses orm.mere's encoder combinators (enc_obj / enc_arr / enc_*), the
+// mirror of the row decoders — no hand-rolled escaping or `++` chains.
 
 let post_json = fn (p: Post) ->
-  "\{\"id\":" ++ show p.id
-    ++ ",\"title\":" ++ jstr p.title
-    ++ ",\"body\":" ++ jstr p.body
-    ++ ",\"published\":" ++ (if p.published then "true" else "false")
-    ++ ",\"created_at\":" ++ jstr p.created_at ++ "}"
+  enc_obj (
+    Cons (("id", enc_int p.id),
+    Cons (("title", enc_str p.title),
+    Cons (("body", enc_str p.body),
+    Cons (("published", enc_bool p.published),
+    Cons (("created_at", enc_str p.created_at), Nil))))))
   ;
 
 let comment_json = fn (c: Comment) ->
-  "\{\"id\":" ++ show c.id
-    ++ ",\"post_id\":" ++ show c.post_id
-    ++ ",\"author\":" ++ jstr c.author
-    ++ ",\"body\":" ++ jstr c.body
-    ++ ",\"created_at\":" ++ jstr c.created_at ++ "}"
+  enc_obj (
+    Cons (("id", enc_int c.id),
+    Cons (("post_id", enc_int c.post_id),
+    Cons (("author", enc_str c.author),
+    Cons (("body", enc_str c.body),
+    Cons (("created_at", enc_str c.created_at), Nil))))))
   ;
 
-let rec _posts_json = fn (ps: Post list) -> fn (first: bool) -> fn (acc: str) ->
-  match ps with
-  | Nil -> acc ++ "]"
-  | Cons (p, rest) ->
-    _posts_json rest false (acc ++ (if first then "" else ",") ++ post_json p)
+let rec _map = fn (f) -> fn (xs) ->
+  match xs with
+  | Nil -> Nil
+  | Cons (x, rest) -> Cons (f x, _map f rest)
   ;
-let posts_json_array = fn (ps: Post list) -> _posts_json ps true "[";
 
-let rec _comments_json = fn (cs: Comment list) -> fn (first: bool) -> fn (acc: str) ->
-  match cs with
-  | Nil -> acc ++ "]"
-  | Cons (c, rest) ->
-    _comments_json rest false (acc ++ (if first then "" else ",") ++ comment_json c)
-  ;
-let comments_json_array = fn (cs: Comment list) -> _comments_json cs true "[";
+let posts_json_array = fn (ps: Post list) -> enc_arr (_map post_json ps);
+let comments_json_array = fn (cs: Comment list) -> enc_arr (_map comment_json cs);
 
 // --- response helpers -----------------------------------------------------
 
@@ -95,8 +80,9 @@ let post_show_h = fn (caps: str list) -> fn (req: str) ->
   | None -> let _ = http_set_status 404 in "post not found\n"
   | Some p ->
     let cs = comments_for fd id in
-    json_ok ("\{\"post\":" ++ post_json p
-             ++ ",\"comments\":" ++ comments_json_array cs ++ "}")
+    json_ok (enc_obj (
+      Cons (("post", post_json p),
+      Cons (("comments", comments_json_array cs), Nil))))
   ;
 
 let post_create_h = fn (req: str) ->
@@ -121,6 +107,27 @@ let comment_create_h = fn (caps: str list) -> fn (req: str) ->
     match comment_create fd pid author body with
     | None -> let _ = http_set_status 500 in "comment failed\n"
     | Some c -> let _ = http_set_status 201 in json_ok (comment_json c)
+  ;
+
+let post_update_h = fn (caps: str list) -> fn (req: str) ->
+  let id = parse_int_or_zero (_first_cap caps) in
+  let title = body_field "title" in
+  let body = body_field "body" in
+  let published = str_eq (body_field "published") "true" in
+  if str_eq title "" then
+    let _ = http_set_status 400 in "title required\n"
+  else
+    match post_update fd id title body published with
+    | None -> let _ = http_set_status 404 in "post not found\n"
+    | Some p -> json_ok (post_json p)
+  ;
+
+let post_delete_h = fn (caps: str list) -> fn (req: str) ->
+  let id = parse_int_or_zero (_first_cap caps) in
+  if post_delete fd id then
+    let _ = http_set_status 204 in ""
+  else
+    let _ = http_set_status 404 in "post not found\n"
   ;
 
 // A tiny HTML index so `GET /` is human-friendly (the Rails feel).
@@ -150,8 +157,10 @@ let routes =
   Cons (route "GET" "/api/posts" posts_index_h,
   Cons (route_pattern "GET" "/api/posts/:id" post_show_h,
   Cons (route "POST" "/api/posts" post_create_h,
+  Cons (route_pattern "PUT" "/api/posts/:id" post_update_h,
+  Cons (route_pattern "DELETE" "/api/posts/:id" post_delete_h,
   Cons (route_pattern "POST" "/api/posts/:id/comments" comment_create_h,
-  Nil)))));
+  Nil)))))));
 
 let handle = router routes not_found;
 let _ = print "mere-blog serving on :8080";

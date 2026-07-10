@@ -72,13 +72,23 @@ building a `Json.json` value from a record by hand is the same boilerplate
 as concatenating strings. Serialization is the mirror of the row-decoder
 problem (B2 space) — reflection would derive it, but Mere has none.
 
-**Worked around** with per-model `post_json` / `comment_json` writers.
-**Signal:** an encoder-combinator story that mirrors the decoders
-(`enc_int` / `enc_str` / an object builder) — or, longer term, a derive —
-would remove the most repetitive part of a JSON API. Positive counterpoint:
-composing `contrib/http` (router, json_body) with the typed model layer
-otherwise had **zero friction** — routing, path-param captures, and body
-parsing all fit together cleanly on the first try.
+**Addressed in-repo (M4):** built encoder combinators in `orm.mere` that
+mirror the decoders — value encoders (`enc_int` / `enc_str` / `enc_bool` /
+`enc_str_opt`) plus `enc_obj` (object from `(key, encoded-value)` pairs)
+and `enc_arr`. A model now writes
+`enc_obj (Cons (("id", enc_int p.id), …))` instead of hand-concatenating,
+and escaping lives in one place. Nice side effect: the `{` /
+string-interpolation escaping papercut (a literal `{` in a string must be
+written `\{`) is now confined to a single spot in `orm.mere` instead of
+being sprinkled across every handler's JSON strings.
+
+**Signal:** the `dec_*` + `enc_*` pair is a genuine reusable typed layer —
+promote it to a `contrib/orm` (or fold into `contrib/db`) so apps don't
+reinvent it; longer term a derive would remove even the field-by-field
+wiring. Positive counterpoint: composing `contrib/http` (router,
+json_body) with the typed model layer had **zero friction** — routing,
+path-param captures, and body parsing all fit together cleanly on the
+first try.
 
 ## Positive: the typed model layer paid off at the HTTP boundary
 
