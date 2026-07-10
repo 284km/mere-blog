@@ -1,0 +1,9 @@
+# Vendored by `mere install` — reproducible from mere.toml + mere.lock.
+.mere_modules/
+.mere_host/
+
+# Build artifacts.
+*.wat
+*.wasm
+*.c
+dist/

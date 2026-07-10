@@ -1,0 +1,76 @@
+// migrate.mere — create the blog schema and smoke-test the raw pg path.
+//
+// M0: prove the vendored host + contrib/db/pg round-trips before any typed
+// layer exists. Connects, (re)creates the tables, seeds one post, reads it
+// back through the raw `(str option list) list` interface.
+//
+// Run (dev):
+//   mere -w migrate.mere > /tmp/m.wat
+//   wat2wasm --enable-tail-call /tmp/m.wat -o /tmp/m.wasm
+//   node .mere_host/run_wasm.js /tmp/m.wasm
+//
+// Assumes a trust-auth Postgres on 127.0.0.1:15499, database "blog".
+
+import "db/pg.mere";
+
+let db_host = "127.0.0.1";
+let db_port = 15499;
+let db_user = "postgres";
+let db_pass = "";
+let db_name = "blog";
+
+// DDL run as simple queries (no params). Order matters: comments -> posts
+// on drop (FK), posts -> comments on create.
+let schema_sql = fn () ->
+  Cons ("DROP TABLE IF EXISTS comments;",
+  Cons ("DROP TABLE IF EXISTS posts;",
+  Cons ("CREATE TABLE posts ( \
+         id serial PRIMARY KEY, \
+         title text NOT NULL, \
+         body text NOT NULL, \
+         published boolean NOT NULL DEFAULT false, \
+         created_at timestamptz NOT NULL DEFAULT now() );",
+  Cons ("CREATE TABLE comments ( \
+         id serial PRIMARY KEY, \
+         post_id integer NOT NULL REFERENCES posts(id) ON DELETE CASCADE, \
+         author text NOT NULL, \
+         body text NOT NULL, \
+         created_at timestamptz NOT NULL DEFAULT now() );",
+  Nil))));
+
+let rec run_all = fn (fd: int) -> fn (stmts: str list) ->
+  match stmts with
+  | Nil -> ()
+  | Cons (sql, rest) ->
+    let _ = pg_query fd sql in
+    run_all fd rest
+  ;
+
+let rec print_rows = fn (rows: (str option list) list) ->
+  match rows with
+  | Nil -> ()
+  | Cons (row, rest) ->
+    let _ = print ("  row: " ++ pg_val_or (pg_col_at row 0) "?"
+                   ++ " | " ++ pg_val_or (pg_col_at row 1) "?"
+                   ++ " | published=" ++ pg_val_or (pg_col_at row 2) "?") in
+    print_rows rest
+  ;
+
+let run = fn () ->
+  let fd = pg_connect db_host db_port db_user db_pass db_name in
+  if fd < 1 then print "connect failed"
+  else
+    let _ = print "connected" in
+    let _ = run_all fd (schema_sql ()) in
+    let _ = print "schema created" in
+    let _ = pg_query_params fd
+              "INSERT INTO posts (title, body, published) VALUES ($1, $2, $3)"
+              (Cons (Some "Hello Mere", Cons (Some "First post from Mere.", Cons (Some "true", Nil)))) in
+    let _ = print "seeded" in
+    let rows = pg_query fd "SELECT id, title, published FROM posts ORDER BY id" in
+    let _ = print "posts:" in
+    let _ = print_rows rows in
+    pg_close fd
+  ;
+
+run ()
