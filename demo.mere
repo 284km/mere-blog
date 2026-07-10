@@ -1,0 +1,57 @@
+// demo.mere — M1 smoke test for the typed model layer.
+//
+// Exercises model.mere end-to-end against a live Postgres: create a post,
+// list posts as typed `Post` records, add a comment, list typed comments.
+// Run like migrate.mere (mere -w | wat2wasm | node .mere_host/run_wasm.js).
+
+import "db/pg.mere";
+import "orm.mere";
+import "model.mere";
+
+let db_host = "127.0.0.1";
+let db_port = 15499;
+
+let show_post = fn (p: Post) ->
+  "#" ++ show p.id ++ " [" ++ (if p.published then "pub" else "draft") ++ "] "
+    ++ p.title ++ " — " ++ p.body
+  ;
+
+let rec print_posts = fn (ps: Post list) ->
+  match ps with
+  | Nil -> ()
+  | Cons (p, rest) -> let _ = print ("  " ++ show_post p) in print_posts rest
+  ;
+
+let show_comment = fn (c: Comment) ->
+  "  - " ++ c.author ++ ": " ++ c.body
+  ;
+
+let rec print_comments = fn (cs: Comment list) ->
+  match cs with
+  | Nil -> ()
+  | Cons (c, rest) -> let _ = print (show_comment c) in print_comments rest
+  ;
+
+let opt_post_id = fn (o: Post option) ->
+  match o with
+  | None -> 0
+  | Some p -> p.id
+  ;
+
+let run = fn () ->
+  let fd = pg_connect db_host db_port "postgres" "" "blog" in
+  if fd < 1 then print "connect failed"
+  else
+    let created = post_create fd "Typed models" "Rows decode into records." true in
+    let _ = print ("created post id=" ++ show (opt_post_id created)) in
+    let _ = print "all posts:" in
+    let _ = print_posts (posts_all fd) in
+    let pid = opt_post_id created in
+    let _ = comment_create fd pid "alice" "Nice, no reflection needed." in
+    let _ = comment_create fd pid "bob" "Cursor threading is a bit verbose though." in
+    let _ = print ("comments for #" ++ show pid ++ ":") in
+    let _ = print_comments (comments_for fd pid) in
+    pg_close fd
+  ;
+
+run ()

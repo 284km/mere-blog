@@ -15,6 +15,11 @@ what this app exercises. Pain found along the way feeds back upstream; see
 - ✅ **M0**: schema + raw pg round-trip. `migrate.mere` connects, creates
   the `posts` / `comments` tables, seeds a post, reads it back through the
   raw driver — proving the vendored host + `contrib/db/pg` path works.
+- ✅ **M1**: typed model layer. `orm.mere` (decoder primitives +
+  `query_as` / `insert_returning`) + `model.mere` (`Post` / `Comment`
+  records, `posts_all` / `post_create` / `comments_for` / …). `demo.mere`
+  creates a post, lists typed `Post` records, adds and lists typed
+  `Comment`s — SQL and raw rows stay behind the model functions.
 
 ## Stack
 

@@ -1,0 +1,85 @@
+// orm.mere — a tiny typed row-mapping layer over contrib/db/pg.
+//
+// `pg_query*` hands back raw `(str option list) list` rows. This turns a
+// row into a typed value with hand-written *builders* that consume columns
+// left to right using small decoder primitives — the ML answer to
+// ActiveRecord's reflection, which Mere (no metaprogramming) can't do.
+//
+// A builder has type  (str option list) -> 'a  and is written as a chain:
+//
+//   let post_of_row = fn (row) ->
+//     let (id, r1)    = dec_int row in
+//     let (title, r2) = dec_str r1  in
+//     ...
+//     Post { id = id, title = title, ... };
+//
+// The cursor (remaining columns) is threaded explicitly — no applicative
+// sugar — which is the main ergonomic cost; see PAIN.md (B2).
+//
+// A primitive decoder returns a tuple `(value, remaining-columns)`. A
+// single-constructor wrapper (`Decoded of …`) would read better but the
+// Wasm backend can't destructure a constructor in `let` (PAIN B2), while
+// tuple `let (a, b) = …` works everywhere — so tuples it is.
+
+import "db/pg.mere";
+
+// NOT NULL primitives apply a default if the cell is NULL / missing.
+let dec_int = fn (cols: str option list) ->
+  match cols with
+  | Cons (v, rest) -> (pg_col_int_or v 0, rest)
+  | Nil -> (0, Nil)
+  ;
+
+let dec_str = fn (cols: str option list) ->
+  match cols with
+  | Cons (v, rest) -> (pg_val_or v "", rest)
+  | Nil -> ("", Nil)
+  ;
+
+let dec_bool = fn (cols: str option list) ->
+  match cols with
+  | Cons (v, rest) -> (pg_col_bool_or v false, rest)
+  | Nil -> (false, Nil)
+  ;
+
+// Nullable: preserves NULL as None (the cell is already `str option`).
+let dec_str_opt = fn (cols: str option list) ->
+  match cols with
+  | Cons (v, rest) -> (v, rest)
+  | Nil -> (None, Nil)
+  ;
+
+// Apply a whole-row builder to every row of a parameterized query.
+let rec _map_rows = fn (build) -> fn (rows: (str option list) list) ->
+  match rows with
+  | Nil -> Nil
+  | Cons (row, rest) -> Cons (build row, _map_rows build rest)
+  ;
+
+// query_as build fd sql params : run a parameterized SELECT and decode
+// each row into an 'a via `build`.
+let query_as = fn (build) -> fn (fd: int) -> fn (sql: str)
+            -> fn (params: str option list) ->
+  _map_rows build (pg_query_params fd sql params)
+  ;
+
+// first element of a list as an option (for single-row lookups).
+let head_opt = fn (xs) ->
+  match xs with
+  | Nil -> None
+  | Cons (h, _) -> Some h
+  ;
+
+// insert_returning: run an INSERT ... RETURNING and decode the one row it
+// produces. Returns None if the statement returned no rows.
+let insert_returning = fn (build) -> fn (fd: int) -> fn (sql: str)
+                    -> fn (params: str option list) ->
+  head_opt (query_as build fd sql params)
+  ;
+
+// exec: run a parameterized statement for effect (INSERT/UPDATE/DELETE
+// without RETURNING); discards any rows.
+let exec = fn (fd: int) -> fn (sql: str) -> fn (params: str option list) ->
+  let _ = pg_query_params fd sql params in
+  ()
+  ;

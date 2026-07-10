@@ -1,0 +1,96 @@
+// model.mere — the blog's typed models + queries, built on orm.mere.
+//
+// Each model is a record type plus a `*_of_row` builder and a handful of
+// query functions that speak in typed values, keeping SQL and the raw
+// (str option list) rows out of the rest of the app.
+
+import "db/pg.mere";
+import "orm.mere";
+
+type Post = {
+  id: int,
+  title: str,
+  body: str,
+  published: bool,
+  created_at: str
+};
+
+type Comment = {
+  id: int,
+  post_id: int,
+  author: str,
+  body: str,
+  created_at: str
+};
+
+// --- row builders (column order must match the SELECT list) --------------
+
+let post_of_row = fn (row: str option list) ->
+  let (id, r1) = dec_int row in
+  let (title, r2) = dec_str r1 in
+  let (body, r3) = dec_str r2 in
+  let (published, r4) = dec_bool r3 in
+  let (created_at, _) = dec_str r4 in
+  Post { id = id, title = title, body = body,
+         published = published, created_at = created_at }
+  ;
+
+let comment_of_row = fn (row: str option list) ->
+  let (id, r1) = dec_int row in
+  let (post_id, r2) = dec_int r1 in
+  let (author, r3) = dec_str r2 in
+  let (body, r4) = dec_str r3 in
+  let (created_at, _) = dec_str r4 in
+  Comment { id = id, post_id = post_id, author = author,
+            body = body, created_at = created_at }
+  ;
+
+let _post_cols = "id, title, body, published, created_at";
+let _comment_cols = "id, post_id, author, body, created_at";
+
+// --- Post queries ---------------------------------------------------------
+
+let posts_all = fn (fd: int) ->
+  query_as post_of_row fd
+    ("SELECT " ++ _post_cols ++ " FROM posts ORDER BY id DESC") Nil
+  ;
+
+let posts_published = fn (fd: int) ->
+  query_as post_of_row fd
+    ("SELECT " ++ _post_cols ++ " FROM posts WHERE published = true ORDER BY id DESC")
+    Nil
+  ;
+
+let post_find = fn (fd: int) -> fn (id: int) ->
+  head_opt (query_as post_of_row fd
+    ("SELECT " ++ _post_cols ++ " FROM posts WHERE id = $1")
+    (Cons (Some (show id), Nil)))
+  ;
+
+let post_create = fn (fd: int) -> fn (title: str) -> fn (body: str)
+              -> fn (published: bool) ->
+  insert_returning post_of_row fd
+    ("INSERT INTO posts (title, body, published) VALUES ($1, $2, $3) \
+      RETURNING " ++ _post_cols)
+    (Cons (Some title,
+     Cons (Some body,
+     Cons (Some (if published then "true" else "false"), Nil))))
+  ;
+
+// --- Comment queries -------------------------------------------------------
+
+let comments_for = fn (fd: int) -> fn (post_id: int) ->
+  query_as comment_of_row fd
+    ("SELECT " ++ _comment_cols ++ " FROM comments WHERE post_id = $1 ORDER BY id")
+    (Cons (Some (show post_id), Nil))
+  ;
+
+let comment_create = fn (fd: int) -> fn (post_id: int) -> fn (author: str)
+                 -> fn (body: str) ->
+  insert_returning comment_of_row fd
+    ("INSERT INTO comments (post_id, author, body) VALUES ($1, $2, $3) \
+      RETURNING " ++ _comment_cols)
+    (Cons (Some (show post_id),
+     Cons (Some author,
+     Cons (Some body, Nil))))
+  ;
