@@ -31,6 +31,9 @@ what this app exercises. Pain found along the way feeds back upstream; see
   mirror of the row decoders. Handlers encode records with
   `enc_obj (Cons (("id", enc_int p.id), …))` instead of hand-rolled string
   concatenation; escaping is centralized.
+- ✅ **M5**: deploy via `mere serve`. The compiled wasm runs on the host
+  vendored into `.mere_host/` — the same packaged-deployment path
+  mere-notes uses, now confirmed for a Postgres-backed HTTP app.
 
 Endpoints: `GET /`, `GET /api/posts`, `GET /api/posts/:id`,
 `POST /api/posts`, `PUT /api/posts/:id`, `DELETE /api/posts/:id`,
@@ -41,13 +44,19 @@ Endpoints: `GET /`, `GET /api/posts`, `GET /api/posts/:id`,
 ```bash
 mere -w app.mere > /tmp/app.wat
 wat2wasm --enable-tail-call /tmp/app.wat -o /tmp/app.wasm
-node .mere_host/run_http_server.js /tmp/app.wasm   # serves :8080
+mere serve /tmp/app.wasm            # runs the wasm on the vendored host, :8080
 
 curl -s localhost:8080/api/posts
 curl -s -X POST localhost:8080/api/posts \
   -d '{"title":"Hi","body":"...","published":"true"}'
 curl -s localhost:8080/api/posts/1
+curl -s -X PUT localhost:8080/api/posts/1 \
+  -d '{"title":"Edited","body":"...","published":"true"}'
+curl -s -X DELETE localhost:8080/api/posts/1
 ```
+
+`mere serve` uses the runtime host vendored into `.mere_host/` by
+`mere install` (no compiler checkout needed at runtime).
 
 ## Stack
 
