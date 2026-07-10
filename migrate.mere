@@ -21,29 +21,29 @@ let db_name = "blog";
 
 // DDL run as simple queries (no params). Order matters: comments -> posts
 // on drop (FK), posts -> comments on create.
-let schema_sql = fn () ->
-  Cons ("DROP TABLE IF EXISTS comments;",
-  Cons ("DROP TABLE IF EXISTS posts;",
-  Cons ("DROP TABLE IF EXISTS users;",
-  Cons ("CREATE TABLE users ( \
-         id serial PRIMARY KEY, \
-         username text UNIQUE NOT NULL, \
-         pw_hash text NOT NULL, \
-         created_at timestamptz NOT NULL DEFAULT now() );",
-  Cons ("CREATE TABLE posts ( \
-         id serial PRIMARY KEY, \
-         author text NOT NULL DEFAULT '', \
-         title text NOT NULL, \
-         body text NOT NULL, \
-         published boolean NOT NULL DEFAULT false, \
-         created_at timestamptz NOT NULL DEFAULT now() );",
-  Cons ("CREATE TABLE comments ( \
-         id serial PRIMARY KEY, \
-         post_id integer NOT NULL REFERENCES posts(id) ON DELETE CASCADE, \
-         author text NOT NULL, \
-         body text NOT NULL, \
-         created_at timestamptz NOT NULL DEFAULT now() );",
-  Nil))))));
+let schema_sql = fn () -> [
+  "DROP TABLE IF EXISTS comments;",
+  "DROP TABLE IF EXISTS posts;",
+  "DROP TABLE IF EXISTS users;",
+  "CREATE TABLE users ( \
+   id serial PRIMARY KEY, \
+   username text UNIQUE NOT NULL, \
+   pw_hash text NOT NULL, \
+   created_at timestamptz NOT NULL DEFAULT now() );",
+  "CREATE TABLE posts ( \
+   id serial PRIMARY KEY, \
+   author text NOT NULL DEFAULT '', \
+   title text NOT NULL, \
+   body text NOT NULL, \
+   published boolean NOT NULL DEFAULT false, \
+   created_at timestamptz NOT NULL DEFAULT now() );",
+  "CREATE TABLE comments ( \
+   id serial PRIMARY KEY, \
+   post_id integer NOT NULL REFERENCES posts(id) ON DELETE CASCADE, \
+   author text NOT NULL, \
+   body text NOT NULL, \
+   created_at timestamptz NOT NULL DEFAULT now() );"
+];
 
 let rec run_all = fn (fd: int) -> fn (stmts: str list) ->
   match stmts with
@@ -72,7 +72,7 @@ let run = fn () ->
     let _ = print "schema created" in
     let _ = pg_query_params fd
               "INSERT INTO posts (title, body, published) VALUES ($1, $2, $3)"
-              (Cons (Some "Hello Mere", Cons (Some "First post from Mere.", Cons (Some "true", Nil)))) in
+              [Some "Hello Mere", Some "First post from Mere.", Some "true"] in
     let _ = print "seeded" in
     let rows = pg_query fd "SELECT id, title, published FROM posts ORDER BY id" in
     let _ = print "posts:" in

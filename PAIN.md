@@ -92,17 +92,23 @@ json_body) with the typed model layer had **zero friction** — routing,
 path-param captures, and body parsing all fit together cleanly on the
 first try.
 
-## B4 🟡 No list literal — deep `Cons (…, Cons (…, Nil))` nesting is error-prone
+## B4 🟢 Deep `Cons (…, Cons (…, Nil))` nesting — feature existed, I missed it
 
-Route tables, SQL batches, decoder chains, and JSON field lists are all
-built by hand-nesting `Cons`. There's no `[a, b, c]` sugar, so an 11-route
-table ends in `Nil)))))))))));` and a miscount (5 closing parens for 6
-`Cons`) is easy to make. Worse, the parse error is reported deep *inside*
-an unrelated string literal several lines up ("expected ')' in tuple"),
-not at the actual paren site — so the diagnostic points nowhere near the
-mistake. **Signal:** list-literal syntax (`[a, b, c]` desugaring to
-`Cons`/`Nil`) would remove the whole class of miscounts, and even without
-it, a friendlier unbalanced-paren diagnostic would help.
+Early on I built route tables, SQL batches, query-param lists, and JSON
+field lists by hand-nesting `Cons`, so an 11-route table ended in
+`Nil)))))))))));` and a miscount (5 closing parens for 6 `Cons`) was easy —
+and the parse error pointed deep *inside* an unrelated string literal, not
+at the paren. I logged this as "no list literal."
+
+**It turns out Mere already has list literals** — `[a, b, c]` desugars to
+`Cons`/`Nil`, `[]` is `Nil`, and there are even comprehensions
+(`[f x | x <- xs, cond]`). This was a **discoverability miss on my part**,
+not a language gap. Fixed by rewriting the whole app to `[...]`: routes,
+`schema_sql`, query params, and `enc_obj` / `enc_arr` field lists are now
+list literals, and the two JSON arrays use comprehensions
+(`Orm.enc_arr [post_json p | p <- ps]`). **Signal:** the feature is great
+but underadvertised — a mention in the language tour / a friendlier
+unbalanced-paren diagnostic would have saved the detour.
 
 ## Positive: session/cookie auth composed cleanly
 

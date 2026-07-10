@@ -93,7 +93,7 @@ let posts_published = fn (fd: int) ->
 let post_find = fn (fd: int) -> fn (id: int) ->
   Orm.head_opt (query_as post_of_row fd
     ("SELECT " ++ _post_cols ++ " FROM posts WHERE id = $1")
-    (Cons (Some (show id), Nil)))
+    [Some (show id)])
   ;
 
 let post_create = fn (fd: int) -> fn (author: str) -> fn (title: str)
@@ -101,10 +101,8 @@ let post_create = fn (fd: int) -> fn (author: str) -> fn (title: str)
   insert_returning post_of_row fd
     ("INSERT INTO posts (author, title, body, published) VALUES ($1, $2, $3, $4) \
       RETURNING " ++ _post_cols)
-    (Cons (Some author,
-     Cons (Some title,
-     Cons (Some body,
-     Cons (Some (if published then "true" else "false"), Nil)))))
+    [Some author, Some title, Some body,
+     Some (if published then "true" else "false")]
   ;
 
 let post_update = fn (fd: int) -> fn (id: int) -> fn (title: str)
@@ -112,17 +110,15 @@ let post_update = fn (fd: int) -> fn (id: int) -> fn (title: str)
   insert_returning post_of_row fd
     ("UPDATE posts SET title = $1, body = $2, published = $3 WHERE id = $4 \
       RETURNING " ++ _post_cols)
-    (Cons (Some title,
-     Cons (Some body,
-     Cons (Some (if published then "true" else "false"),
-     Cons (Some (show id), Nil)))))
+    [Some title, Some body,
+     Some (if published then "true" else "false"), Some (show id)]
   ;
 
 // Returns true if a row was deleted (RETURNING id yields one row), false
 // if no post had that id.
 let post_delete = fn (fd: int) -> fn (id: int) ->
   match pg_query_params fd "DELETE FROM posts WHERE id = $1 RETURNING id"
-          (Cons (Some (show id), Nil)) with
+          [Some (show id)] with
   | Nil -> false
   | Cons (_, _) -> true
   ;
@@ -132,7 +128,7 @@ let post_delete = fn (fd: int) -> fn (id: int) ->
 let comments_for = fn (fd: int) -> fn (post_id: int) ->
   query_as comment_of_row fd
     ("SELECT " ++ _comment_cols ++ " FROM comments WHERE post_id = $1 ORDER BY id")
-    (Cons (Some (show post_id), Nil))
+    [Some (show post_id)]
   ;
 
 let comment_create = fn (fd: int) -> fn (post_id: int) -> fn (author: str)
@@ -140,9 +136,7 @@ let comment_create = fn (fd: int) -> fn (post_id: int) -> fn (author: str)
   insert_returning comment_of_row fd
     ("INSERT INTO comments (post_id, author, body) VALUES ($1, $2, $3) \
       RETURNING " ++ _comment_cols)
-    (Cons (Some (show post_id),
-     Cons (Some author,
-     Cons (Some body, Nil))))
+    [Some (show post_id), Some author, Some body]
   ;
 
 // --- User queries ----------------------------------------------------------
@@ -150,12 +144,12 @@ let comment_create = fn (fd: int) -> fn (post_id: int) -> fn (author: str)
 let user_find_by_name = fn (fd: int) -> fn (username: str) ->
   Orm.head_opt (query_as user_of_row fd
     ("SELECT " ++ _user_cols ++ " FROM users WHERE username = $1")
-    (Cons (Some username, Nil)))
+    [Some username])
   ;
 
 let user_create = fn (fd: int) -> fn (username: str) -> fn (pw_hash: str) ->
   insert_returning user_of_row fd
     ("INSERT INTO users (username, pw_hash) VALUES ($1, $2) \
       RETURNING " ++ _user_cols)
-    (Cons (Some username, Cons (Some pw_hash, Nil)))
+    [Some username, Some pw_hash]
   ;
