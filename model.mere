@@ -1,11 +1,24 @@
-// model.mere — the blog's typed models + queries, built on orm.mere.
+// model.mere — the blog's typed models + queries, built on contrib/orm.
 //
 // Each model is a record type plus a `*_of_row` builder and a handful of
 // query functions that speak in typed values, keeping SQL and the raw
 // (str option list) rows out of the rest of the app.
 
 import "db/pg.mere";
-import "orm.mere";
+import "orm/orm.mere";
+
+// pg query glue: run a parameterized query and decode each row with a
+// contrib/orm builder. (The decode/encode combinators themselves live in
+// contrib/orm now; only this pg-specific runner stays app-local.)
+let query_as = fn (build) -> fn (fd: int) -> fn (sql: str)
+            -> fn (params: str option list) ->
+  Orm.decode_rows build (pg_query_params fd sql params)
+  ;
+
+let insert_returning = fn (build) -> fn (fd: int) -> fn (sql: str)
+                    -> fn (params: str option list) ->
+  Orm.head_opt (query_as build fd sql params)
+  ;
 
 type Post = {
   id: int,
@@ -33,29 +46,29 @@ type User = {
 // --- row builders (column order must match the SELECT list) --------------
 
 let post_of_row = fn (row: str option list) ->
-  let (id, r1) = dec_int row in
-  let (author, r2) = dec_str r1 in
-  let (title, r3) = dec_str r2 in
-  let (body, r4) = dec_str r3 in
-  let (published, r5) = dec_bool r4 in
-  let (created_at, _) = dec_str r5 in
+  let (id, r1) = Orm.dec_int row in
+  let (author, r2) = Orm.dec_str r1 in
+  let (title, r3) = Orm.dec_str r2 in
+  let (body, r4) = Orm.dec_str r3 in
+  let (published, r5) = Orm.dec_bool r4 in
+  let (created_at, _) = Orm.dec_str r5 in
   Post { id = id, author = author, title = title, body = body,
          published = published, created_at = created_at }
   ;
 
 let user_of_row = fn (row: str option list) ->
-  let (id, r1) = dec_int row in
-  let (username, r2) = dec_str r1 in
-  let (pw_hash, _) = dec_str r2 in
+  let (id, r1) = Orm.dec_int row in
+  let (username, r2) = Orm.dec_str r1 in
+  let (pw_hash, _) = Orm.dec_str r2 in
   User { id = id, username = username, pw_hash = pw_hash }
   ;
 
 let comment_of_row = fn (row: str option list) ->
-  let (id, r1) = dec_int row in
-  let (post_id, r2) = dec_int r1 in
-  let (author, r3) = dec_str r2 in
-  let (body, r4) = dec_str r3 in
-  let (created_at, _) = dec_str r4 in
+  let (id, r1) = Orm.dec_int row in
+  let (post_id, r2) = Orm.dec_int r1 in
+  let (author, r3) = Orm.dec_str r2 in
+  let (body, r4) = Orm.dec_str r3 in
+  let (created_at, _) = Orm.dec_str r4 in
   Comment { id = id, post_id = post_id, author = author,
             body = body, created_at = created_at }
   ;
@@ -78,7 +91,7 @@ let posts_published = fn (fd: int) ->
   ;
 
 let post_find = fn (fd: int) -> fn (id: int) ->
-  head_opt (query_as post_of_row fd
+  Orm.head_opt (query_as post_of_row fd
     ("SELECT " ++ _post_cols ++ " FROM posts WHERE id = $1")
     (Cons (Some (show id), Nil)))
   ;
@@ -135,7 +148,7 @@ let comment_create = fn (fd: int) -> fn (post_id: int) -> fn (author: str)
 // --- User queries ----------------------------------------------------------
 
 let user_find_by_name = fn (fd: int) -> fn (username: str) ->
-  head_opt (query_as user_of_row fd
+  Orm.head_opt (query_as user_of_row fd
     ("SELECT " ++ _user_cols ++ " FROM users WHERE username = $1")
     (Cons (Some username, Nil)))
   ;

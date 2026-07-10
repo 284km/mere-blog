@@ -4,19 +4,26 @@
 name = "db"
 git = "https://github.com/merelang/mere"
 subdir = "contrib/db"
-rev = "a5840987a23c90923ca8f9be776e5240dce0f0fa"
+rev = "577bf583274a2d2fa21292348134c4c22cd3781b"
 hash = "md5:789c471b3d929bb5e6b4f44149ab15cb"
 
 [[package]]
 name = "http"
 git = "https://github.com/merelang/mere"
 subdir = "contrib/http"
-rev = "a5840987a23c90923ca8f9be776e5240dce0f0fa"
+rev = "577bf583274a2d2fa21292348134c4c22cd3781b"
 hash = "md5:5b8a9568842c83700bc244346ca40437"
 
 [[package]]
 name = "log"
 git = "https://github.com/merelang/mere"
 subdir = "contrib/log"
-rev = "a5840987a23c90923ca8f9be776e5240dce0f0fa"
+rev = "577bf583274a2d2fa21292348134c4c22cd3781b"
 hash = "md5:1362e66d0854fd63d7cb0e88e908b59e"
+
+[[package]]
+name = "orm"
+git = "https://github.com/merelang/mere"
+subdir = "contrib/orm"
+rev = "577bf583274a2d2fa21292348134c4c22cd3781b"
+hash = "md5:779c300b65d0709bdce976f8ac2c112c"

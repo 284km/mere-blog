@@ -39,6 +39,11 @@ what this app exercises. Pain found along the way feeds back upstream; see
   `contrib/http/session` (cookie sessions) with `sha256_hex` password
   hashing. Posts record their `author`; creating a post requires login,
   and only the author may update/delete their own (403 otherwise).
+- ✅ **M7**: the local decode/encode combinators graduated upstream into
+  `contrib/orm` (mere v0.1.4). This repo now `mere install`s `orm` and
+  uses `Orm.dec_*` / `Orm.enc_*`; only the pg-specific query runner
+  (`query_as` / `insert_returning`) stays app-local. The dogfood's typed
+  layer is now a reusable package.
 
 Endpoints: `GET /`, `POST /api/signup`, `POST /api/login`,
 `POST /api/logout`, `GET /api/me`, `GET /api/posts`, `GET /api/posts/:id`,
@@ -68,7 +73,8 @@ curl -s -X DELETE localhost:8080/api/posts/1
 
 - **Web**: `contrib/http` (router, json_body, …)
 - **DB**: `contrib/db/pg` — a pure-Mere PostgreSQL wire-protocol client
-- **Model layer**: hand-written row decoders + typed query helpers (this repo)
+- **Model layer**: `contrib/orm` (row decoders + JSON encoders, graduated
+  from this dogfood) + a small pg-specific query runner in this repo
 - **Runtime**: compiled to Wasm, run on the vendored Node host (`mere serve`)
 
 ## Develop

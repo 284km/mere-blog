@@ -5,7 +5,7 @@
 // Run like migrate.mere (mere -w | wat2wasm | node .mere_host/run_wasm.js).
 
 import "db/pg.mere";
-import "orm.mere";
+import "orm/orm.mere";
 import "model.mere";
 
 let db_host = "127.0.0.1";
@@ -42,7 +42,7 @@ let run = fn () ->
   let fd = pg_connect db_host db_port "postgres" "" "blog" in
   if fd < 1 then print "connect failed"
   else
-    let created = post_create fd "Typed models" "Rows decode into records." true in
+    let created = post_create fd "demo" "Typed models" "Rows decode into records." true in
     let _ = print ("created post id=" ++ show (opt_post_id created)) in
     let _ = print "all posts:" in
     let _ = print_posts (posts_all fd) in

@@ -82,10 +82,12 @@ string-interpolation escaping papercut (a literal `{` in a string must be
 written `\{`) is now confined to a single spot in `orm.mere` instead of
 being sprinkled across every handler's JSON strings.
 
-**Signal:** the `dec_*` + `enc_*` pair is a genuine reusable typed layer —
-promote it to a `contrib/orm` (or fold into `contrib/db`) so apps don't
-reinvent it; longer term a derive would remove even the field-by-field
-wiring. Positive counterpoint: composing `contrib/http` (router,
+**Promoted upstream (mere v0.1.4):** the `dec_*` + `enc_*` pair graduated
+into `contrib/orm` (`module Orm`). This repo now `mere install`s it and
+uses `Orm.dec_*` / `Orm.enc_*`, keeping only the pg-specific query runner
+local — so the reduction round-trips: dogfood → language/library fix →
+release → app consumes the package. Longer term a derive would remove even
+the field-by-field wiring. Positive counterpoint: composing `contrib/http` (router,
 json_body) with the typed model layer had **zero friction** — routing,
 path-param captures, and body parsing all fit together cleanly on the
 first try.
