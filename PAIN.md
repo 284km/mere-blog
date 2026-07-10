@@ -60,3 +60,30 @@ desugars a general irrefutable pattern to a single-arm
 `match value with | pat -> body`, reusing the existing pattern compiler.
 Verified across interp + C + Wasm + LLVM. Once a mere release ships this,
 the decoders can go back to the named `Decoded of …` wrapper.
+
+## B3 🟡 No record → JSON serialization; every app hand-rolls it
+
+M2's HTTP layer builds JSON responses by hand (`jstr` for escaping +
+string concatenation of each field), exactly as `examples/http_todo_pg`
+does — its own comment concedes "a real API would centralize this." The
+typed model layer produces `Post` / `Comment` records, but turning a
+record into JSON is still manual: there's no record → JSON encoder, and
+building a `Json.json` value from a record by hand is the same boilerplate
+as concatenating strings. Serialization is the mirror of the row-decoder
+problem (B2 space) — reflection would derive it, but Mere has none.
+
+**Worked around** with per-model `post_json` / `comment_json` writers.
+**Signal:** an encoder-combinator story that mirrors the decoders
+(`enc_int` / `enc_str` / an object builder) — or, longer term, a derive —
+would remove the most repetitive part of a JSON API. Positive counterpoint:
+composing `contrib/http` (router, json_body) with the typed model layer
+otherwise had **zero friction** — routing, path-param captures, and body
+parsing all fit together cleanly on the first try.
+
+## Positive: the typed model layer paid off at the HTTP boundary
+
+Handlers read like Rails: `post_find fd id` returns a `Post option`,
+`comments_for fd id` a `Comment list`, and JSON is built from typed fields
+(`p.title`, `c.author`) — SQL and raw `(str option list)` rows never
+appear in `app.mere`. The model layer (M1) is what makes the web layer
+(M2) thin.

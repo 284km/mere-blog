@@ -1,0 +1,159 @@
+// app.mere — M2: the blog served over HTTP.
+//
+// Wires contrib/http (router + json body) to the typed model layer. JSON
+// responses are built *from the typed records* (post_json p uses p.title,
+// p.body, …), so the model layer — not raw rows — drives serialization.
+//
+// Run:
+//   mere -w app.mere > /tmp/app.wat
+//   wat2wasm --enable-tail-call /tmp/app.wat -o /tmp/app.wasm
+//   node .mere_host/run_http_server.js /tmp/app.wasm      # serves :8080
+//
+// A trust-auth Postgres on 127.0.0.1:15499 (db "blog") is expected; run
+// migrate.mere first to create the schema.
+
+import "db/pg.mere";
+import "orm.mere";
+import "model.mere";
+import "http/http.mere";
+import "http/router.mere";
+import "http/json_body.mere";
+
+// One connection for the process — the Node host is single-threaded, so a
+// single fd is enough for a demo (a pool would be the next step).
+let fd = pg_connect "127.0.0.1" 15499 "postgres" "" "blog";
+let _ = if fd < 1 then print "WARN: pg connect failed" else print "pg connected";
+
+// --- JSON building from typed records ------------------------------------
+
+let _json_esc_char = fn (c: str) ->
+  if str_eq c "\"" then "\\\""
+  else if str_eq c "\\" then "\\\\"
+  else c
+  ;
+
+let rec _je = fn (s: str) -> fn (i: int) -> fn (n: int) -> fn (acc: str) ->
+  if i >= n then acc else _je s (i + 1) n (acc ++ _json_esc_char (char_at s i))
+  ;
+
+// a JSON string literal (quoted + escaped).
+let jstr = fn (s: str) -> "\"" ++ _je s 0 (str_len s) "" ++ "\"";
+
+let post_json = fn (p: Post) ->
+  "\{\"id\":" ++ show p.id
+    ++ ",\"title\":" ++ jstr p.title
+    ++ ",\"body\":" ++ jstr p.body
+    ++ ",\"published\":" ++ (if p.published then "true" else "false")
+    ++ ",\"created_at\":" ++ jstr p.created_at ++ "}"
+  ;
+
+let comment_json = fn (c: Comment) ->
+  "\{\"id\":" ++ show c.id
+    ++ ",\"post_id\":" ++ show c.post_id
+    ++ ",\"author\":" ++ jstr c.author
+    ++ ",\"body\":" ++ jstr c.body
+    ++ ",\"created_at\":" ++ jstr c.created_at ++ "}"
+  ;
+
+let rec _posts_json = fn (ps: Post list) -> fn (first: bool) -> fn (acc: str) ->
+  match ps with
+  | Nil -> acc ++ "]"
+  | Cons (p, rest) ->
+    _posts_json rest false (acc ++ (if first then "" else ",") ++ post_json p)
+  ;
+let posts_json_array = fn (ps: Post list) -> _posts_json ps true "[";
+
+let rec _comments_json = fn (cs: Comment list) -> fn (first: bool) -> fn (acc: str) ->
+  match cs with
+  | Nil -> acc ++ "]"
+  | Cons (c, rest) ->
+    _comments_json rest false (acc ++ (if first then "" else ",") ++ comment_json c)
+  ;
+let comments_json_array = fn (cs: Comment list) -> _comments_json cs true "[";
+
+// --- response helpers -----------------------------------------------------
+
+let json_ok = fn (body: str) ->
+  let _ = http_set_content_type "application/json" in body ++ "\n"
+  ;
+
+let _first_cap = fn (caps: str list) ->
+  match caps with
+  | Nil -> ""
+  | Cons (h, _) -> h
+  ;
+
+// --- handlers -------------------------------------------------------------
+
+let posts_index_h = fn (req: str) ->
+  json_ok (posts_json_array (posts_all fd))
+  ;
+
+let post_show_h = fn (caps: str list) -> fn (req: str) ->
+  let id = parse_int_or_zero (_first_cap caps) in
+  match post_find fd id with
+  | None -> let _ = http_set_status 404 in "post not found\n"
+  | Some p ->
+    let cs = comments_for fd id in
+    json_ok ("\{\"post\":" ++ post_json p
+             ++ ",\"comments\":" ++ comments_json_array cs ++ "}")
+  ;
+
+let post_create_h = fn (req: str) ->
+  let title = body_field "title" in
+  let body = body_field "body" in
+  let published = str_eq (body_field "published") "true" in
+  if str_eq title "" then
+    let _ = http_set_status 400 in "title required\n"
+  else
+    match post_create fd title body published with
+    | None -> let _ = http_set_status 500 in "create failed\n"
+    | Some p -> let _ = http_set_status 201 in json_ok (post_json p)
+  ;
+
+let comment_create_h = fn (caps: str list) -> fn (req: str) ->
+  let pid = parse_int_or_zero (_first_cap caps) in
+  let author = body_field "author" in
+  let body = body_field "body" in
+  if str_eq author "" then
+    let _ = http_set_status 400 in "author required\n"
+  else
+    match comment_create fd pid author body with
+    | None -> let _ = http_set_status 500 in "comment failed\n"
+    | Some c -> let _ = http_set_status 201 in json_ok (comment_json c)
+  ;
+
+// A tiny HTML index so `GET /` is human-friendly (the Rails feel).
+let rec _posts_html = fn (ps: Post list) -> fn (acc: str) ->
+  match ps with
+  | Nil -> acc
+  | Cons (p, rest) ->
+    _posts_html rest
+      (acc ++ "<li><b>" ++ p.title ++ "</b> — " ++ p.body ++ "</li>")
+  ;
+
+let index_h = fn (req: str) ->
+  let _ = http_set_content_type "text/html" in
+  "<!doctype html><html><body><h1>mere-blog</h1><ul>"
+    ++ _posts_html (posts_published fd) ""
+    ++ "</ul></body></html>"
+  ;
+
+let not_found = fn (req: str) ->
+  let _ = http_set_status 404 in "not found\n"
+  ;
+
+// --- routes + serve -------------------------------------------------------
+
+let routes =
+  Cons (route "GET" "/" index_h,
+  Cons (route "GET" "/api/posts" posts_index_h,
+  Cons (route_pattern "GET" "/api/posts/:id" post_show_h,
+  Cons (route "POST" "/api/posts" post_create_h,
+  Cons (route_pattern "POST" "/api/posts/:id/comments" comment_create_h,
+  Nil)))));
+
+let handle = router routes not_found;
+let _ = print "mere-blog serving on :8080";
+let _ = http_serve 8080 handle;
+0

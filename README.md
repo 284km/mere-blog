@@ -20,6 +20,24 @@ what this app exercises. Pain found along the way feeds back upstream; see
   records, `posts_all` / `post_create` / `comments_for` / …). `demo.mere`
   creates a post, lists typed `Post` records, adds and lists typed
   `Comment`s — SQL and raw rows stay behind the model functions.
+- ✅ **M2**: HTTP layer. `app.mere` serves the blog over HTTP via
+  `contrib/http` (router + json body): `GET /` (HTML index), `GET
+  /api/posts`, `GET /api/posts/:id` (post + comments), `POST /api/posts`,
+  `POST /api/posts/:id/comments`. JSON is built from the typed records, so
+  the model layer keeps the handlers thin.
+
+## Run the server
+
+```bash
+mere -w app.mere > /tmp/app.wat
+wat2wasm --enable-tail-call /tmp/app.wat -o /tmp/app.wasm
+node .mere_host/run_http_server.js /tmp/app.wasm   # serves :8080
+
+curl -s localhost:8080/api/posts
+curl -s -X POST localhost:8080/api/posts \
+  -d '{"title":"Hi","body":"...","published":"true"}'
+curl -s localhost:8080/api/posts/1
+```
 
 ## Stack
 
