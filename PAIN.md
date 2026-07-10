@@ -28,7 +28,7 @@ compiler should either reject a user `main` binding with a clear message
 or namespace user bindings away from the synthesized entry — surfacing a
 codegen name clash through a downstream tool is a poor diagnostic.
 
-## B2 🟡 Wasm backend can't destructure a constructor in `let`
+## B2 🟢 Backends couldn't destructure a constructor/record in `let` (fixed upstream)
 
 The natural decoder primitive returns a value plus the unread columns, and
 the ideal shape is a named single-constructor wrapper:
@@ -45,14 +45,18 @@ codegen error: unsupported (wasm codegen, Phase 6.1 MVP):
   non-P_var let pattern — Phase 6 later slice
 ```
 
-Curiously **tuple** `let (a, b) = …` *does* compile on Wasm, and the interp
-+ C backends accept both — so this is a Wasm-only parity gap, specific to
-constructor (not tuple) patterns in `let`.
+Curiously **tuple** `let (a, b) = …` *does* compile, but constructor
+(and, it turned out, record) patterns in `let` failed — and not just on
+Wasm: the **C and LLVM backends had the same gap** (only the interp
+accepted every pattern). A three-backend parity gap.
 
 **Worked around** by having decoders return a bare tuple
 `(value, remaining)` instead of a `Decoded of …` wrapper — tuple `let`
 destructuring works everywhere, so the cursor-threading builder style
-survives, just without the descriptive constructor name. **Signal:** lower
-constructor `let` patterns on the Wasm backend the same way `match` already
-does (or desugar `let pat = e` to a one-arm `match`), so backends reach
-parity.
+survives, just without the descriptive constructor name.
+
+**Fixed upstream** (mere `047662e`): each backend's `let` handler now
+desugars a general irrefutable pattern to a single-arm
+`match value with | pat -> body`, reusing the existing pattern compiler.
+Verified across interp + C + Wasm + LLVM. Once a mere release ships this,
+the decoders can go back to the named `Decoded of …` wrapper.
