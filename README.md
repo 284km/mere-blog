@@ -48,6 +48,11 @@ what this app exercises. Pain found along the way feeds back upstream; see
   uses `Orm.dec_*` / `Orm.enc_*`; only the pg-specific query runner
   (`query_as` / `insert_returning`) stays app-local. The dogfood's typed
   layer is now a reusable package.
+- ✅ **M9**: the hand-written JSON layer is gone. `to_json` (mere v0.1.6, a
+  derive-style structural serializer) turns any typed record/list into JSON,
+  so handlers just `to_json p` / `to_json (posts_all fd)`. Two projection
+  records stay explicit: `UserPublic` (never serialize `pw_hash`) and
+  `PostView` (the post + comments composite). `app.mere` shrank ~40%.
 
 Endpoints: `GET /`, `POST /api/signup`, `POST /api/login`,
 `POST /api/logout`, `GET /api/me`, `GET /api/posts`, `GET /api/posts/:id`,
@@ -75,7 +80,7 @@ curl -s -X DELETE localhost:8080/api/posts/1
 
 ## Run as a single native binary (no Node)
 
-With Mere ≥ v0.1.5 (native full-stack: native TCP + HTTP server +
+With Mere ≥ v0.1.6 (native full-stack: native TCP + HTTP server +
 SHA-256), the whole app compiles to one native binary — no Node, no Wasm:
 
 ```bash
@@ -86,9 +91,10 @@ clang -O2 app.c -o mere-blog        # ~264 KB, statically self-contained
 
 The C backend supplies native implementations for the `tcp_*` / `mem_*`
 (pg wire protocol over a Wasm-style byte arena), `http_serve` (a POSIX
-accept loop), and `sha256_hex` / `gen_request_id` externs. Postgres SSL
-and SCRAM password auth aren't implemented natively yet — use a
-trust-auth / plaintext connection (the dev setup above).
+accept loop), and `sha256_hex` / `gen_request_id` externs. Postgres
+**SCRAM password auth works natively** (mere v0.1.6 — real SHA-256 / HMAC /
+PBKDF2 in the C runtime), so a native binary can talk to a password
+Postgres over plaintext. Only TLS (`sslmode=require`) is still pending.
 
 ## Stack
 

@@ -1,8 +1,8 @@
 // app.mere — M2: the blog served over HTTP.
 //
 // Wires contrib/http (router + json body) to the typed model layer. JSON
-// responses are built *from the typed records* (post_json p uses p.title,
-// p.body, …), so the model layer — not raw rows — drives serialization.
+// responses use `to_json` (mere v0.1.6), which serializes a typed record /
+// list structurally — so there are no hand-written JSON writers here.
 //
 // Run:
 //   mere -w app.mere > /tmp/app.wat
@@ -13,7 +13,6 @@
 // migrate.mere first to create the schema.
 
 import "db/pg.mere";
-import "orm/orm.mere";
 import "model.mere";
 import "http/http.mere";
 import "http/router.mere";
@@ -36,44 +35,26 @@ let sessions = session_new_store ();
 extern fn sha256_hex: str -> str;
 let hash_pw = fn (p: str) -> sha256_hex ("mere-blog::pepper::" ++ p);
 
-// --- JSON building from typed records ------------------------------------
+// --- JSON responses via `to_json` (mere v0.1.6) --------------------------
 //
-// Uses contrib/orm's encoder combinators (Orm.enc_obj / Orm.enc_arr / …),
-// the mirror of the row decoders — no hand-rolled escaping or `++` chains.
+// `to_json` serializes any value structurally: a record's field set IS its
+// JSON object, a list becomes an array. So `to_json p` / `to_json (posts_all
+// fd)` replace the per-model writers that used to live here — the whole
+// hand-written JSON layer collapses. Two spots use a *projection* record
+// instead of the raw model:
+//   - users must never leak `pw_hash`, so serialize a public projection;
+//   - the show-post response is a composite (post + its comments).
 
-let post_json = fn (p: Post) ->
-  Orm.enc_obj [
-    ("id", Orm.enc_int p.id),
-    ("author", Orm.enc_str p.author),
-    ("title", Orm.enc_str p.title),
-    ("body", Orm.enc_str p.body),
-    ("published", Orm.enc_bool p.published),
-    ("created_at", Orm.enc_str p.created_at)
-  ]
-  ;
+// A user's public shape — deliberately omits pw_hash (to_json on a `User`
+// would include it).
+type UserPublic = { id: int, username: str };
+let user_public = fn (u: User) -> UserPublic { id = u.id, username = u.username };
 
-// User JSON never includes pw_hash.
-let user_json = fn (u: User) ->
-  Orm.enc_obj [
-    ("id", Orm.enc_int u.id),
-    ("username", Orm.enc_str u.username)
-  ]
-  ;
+// GET /api/posts/:id response shape (to_json handles the nesting).
+type PostView = { post: Post, comments: Comment list };
 
-let comment_json = fn (c: Comment) ->
-  Orm.enc_obj [
-    ("id", Orm.enc_int c.id),
-    ("post_id", Orm.enc_int c.post_id),
-    ("author", Orm.enc_str c.author),
-    ("body", Orm.enc_str c.body),
-    ("created_at", Orm.enc_str c.created_at)
-  ]
-  ;
-
-let posts_json_array = fn (ps: Post list) ->
-  Orm.enc_arr [post_json p | p <- ps];
-let comments_json_array = fn (cs: Comment list) ->
-  Orm.enc_arr [comment_json c | c <- cs];
+// A trivial {"ok": true} acknowledgement.
+type OkResp = { ok: bool };
 
 // --- response helpers -----------------------------------------------------
 
@@ -106,7 +87,7 @@ let signup_h = fn (req: str) ->
       | None -> let _ = http_set_status 500 in "signup failed\n"
       | Some u ->
         let _ = session_login sessions u.username in
-        let _ = http_set_status 201 in json_ok (user_json u)
+        let _ = http_set_status 201 in json_ok (to_json (user_public u))
   ;
 
 let login_h = fn (req: str) ->
@@ -116,14 +97,14 @@ let login_h = fn (req: str) ->
   | None -> let _ = http_set_status 401 in "invalid credentials\n"
   | Some u ->
     if str_eq u.pw_hash (hash_pw password) then
-      let _ = session_login sessions u.username in json_ok (user_json u)
+      let _ = session_login sessions u.username in json_ok (to_json (user_public u))
     else
       let _ = http_set_status 401 in "invalid credentials\n"
   ;
 
 let logout_h = fn (req: str) ->
   let _ = session_logout sessions in
-  json_ok (Orm.enc_obj [("ok", Orm.enc_bool true)])
+  json_ok (to_json (OkResp { ok = true }))
   ;
 
 let me_h = fn (req: str) ->
@@ -132,13 +113,13 @@ let me_h = fn (req: str) ->
   else
     match user_find_by_name fd username with
     | None -> _unauthorized ()
-    | Some u -> json_ok (user_json u)
+    | Some u -> json_ok (to_json (user_public u))
   ;
 
 // --- handlers -------------------------------------------------------------
 
 let posts_index_h = fn (req: str) ->
-  json_ok (posts_json_array (posts_all fd))
+  json_ok (to_json (posts_all fd))
   ;
 
 let post_show_h = fn (caps: str list) -> fn (req: str) ->
@@ -147,10 +128,7 @@ let post_show_h = fn (caps: str list) -> fn (req: str) ->
   | None -> let _ = http_set_status 404 in "post not found\n"
   | Some p ->
     let cs = comments_for fd id in
-    json_ok (Orm.enc_obj [
-      ("post", post_json p),
-      ("comments", comments_json_array cs)
-    ])
+    json_ok (to_json (PostView { post = p, comments = cs }))
   ;
 
 let post_create_h = fn (req: str) ->
@@ -165,7 +143,7 @@ let post_create_h = fn (req: str) ->
     else
       match post_create fd user title body published with
       | None -> let _ = http_set_status 500 in "create failed\n"
-      | Some p -> let _ = http_set_status 201 in json_ok (post_json p)
+      | Some p -> let _ = http_set_status 201 in json_ok (to_json p)
   ;
 
 let comment_create_h = fn (caps: str list) -> fn (req: str) ->
@@ -177,7 +155,7 @@ let comment_create_h = fn (caps: str list) -> fn (req: str) ->
   else
     match comment_create fd pid author body with
     | None -> let _ = http_set_status 500 in "comment failed\n"
-    | Some c -> let _ = http_set_status 201 in json_ok (comment_json c)
+    | Some c -> let _ = http_set_status 201 in json_ok (to_json c)
   ;
 
 // Update / delete require login AND ownership: only a post's own author
@@ -200,7 +178,7 @@ let post_update_h = fn (caps: str list) -> fn (req: str) ->
         else
           (match post_update fd id title body published with
            | None -> let _ = http_set_status 404 in "post not found\n"
-           | Some p -> json_ok (post_json p))
+           | Some p -> json_ok (to_json p))
       else
         let _ = http_set_status 403 in "not your post\n"
   ;
