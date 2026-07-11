@@ -58,8 +58,8 @@ what this app exercises. Pain found along the way feeds back upstream; see
   (`Credentials`, `NewPost`, `NewComment`) via **`of_json_opt`** (mere
   v0.1.7) — the safe, `None`-on-error sibling of `of_json`, so a malformed
   body returns a 4xx instead of crashing the server. Drove `of_json` /
-  `of_json_opt` upstream (see PAIN B5). **Requires the native build** — the
-  JSON decoders are interp + C only; Wasm `of_json` is a follow-up.
+  `of_json_opt` upstream (see PAIN B5); mere v0.1.8 added the Wasm backend,
+  so both the wasm and native builds decode request bodies.
 
 Endpoints: `GET /`, `POST /api/signup`, `POST /api/login`,
 `POST /api/logout`, `GET /api/me`, `GET /api/posts`, `GET /api/posts/:id`,
@@ -68,12 +68,17 @@ Endpoints: `GET /`, `POST /api/signup`, `POST /api/login`,
 
 ## Run the server
 
-Since M10 the request bodies decode with `of_json_opt`, which is interp + C
-only, so **build native** (the `mere -w` wasm path can't compile it yet):
+Two ways — wasm on the vendored Node host, or a single native binary
+(both decode request bodies via `of_json_opt`, mere ≥ v0.1.8):
 
 ```bash
-mere -c app.mere > /tmp/app.c
-clang -O2 -o /tmp/blog /tmp/app.c
+# wasm + Node host
+mere -w app.mere > /tmp/app.wat
+wat2wasm --enable-tail-call /tmp/app.wat -o /tmp/app.wasm
+mere serve /tmp/app.wasm            # :8080
+
+# or: single native binary (no Node)
+mere -c app.mere > /tmp/app.c && clang -O2 -o /tmp/blog /tmp/app.c
 /tmp/blog                           # native TCP + HTTP server, :8080
 
 curl -s localhost:8080/api/posts

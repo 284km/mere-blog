@@ -148,10 +148,10 @@ The loop: dogfood found the decode gap + that fail-fast is unsafe for
 untrusted input → mere grew `of_json` **and** `of_json_opt` → the app
 dropped `body_field` for typed decoding.
 
-**Known gap:** `of_json` / `of_json_opt` are interp + C only; the Wasm
-backend doesn't have them yet (as with LLVM's missing `to_json`). So this
-app now requires the **native build** (`mere -c | clang`) — the `mere -w`
-wasm path can't compile the JSON decode until Wasm `of_json` lands.
+**Backend coverage:** `of_json` / `of_json_opt` shipped interp + C in
+v0.1.7, then the **Wasm backend in v0.1.8** — so both the wasm/Node and the
+single-native-binary builds decode request bodies. (LLVM still lacks the
+JSON derives, as it lacks `to_json` too.)
 
 ## Positive: session/cookie auth composed cleanly
 
