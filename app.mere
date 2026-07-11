@@ -56,6 +56,17 @@ type PostView = { post: Post, comments: Comment list };
 // A trivial {"ok": true} acknowledgement.
 type OkResp = { ok: bool };
 
+// --- request bodies: decoded with of_json_opt (mere v0.1.7) ---------------
+//
+// of_json_opt : str -> 'a option returns None on ANY parse / shape error, so
+// a malformed or incomplete request body yields a clean 400 instead of
+// crashing the server (of_json's fail-fast is for trusted input only). It
+// replaces the hand-rolled `body_field "x"` field-plucking. Every field is
+// required (present in the JSON object); optional-with-default isn't modeled.
+type Credentials = { username: str, password: str };
+type NewPost = { title: str, body: str, published: bool };
+type NewComment = { author: str, body: str };
+
 // --- response helpers -----------------------------------------------------
 
 let json_ok = fn (body: str) ->
@@ -75,31 +86,33 @@ let _unauthorized = fn (u: unit) ->
 // --- auth handlers --------------------------------------------------------
 
 let signup_h = fn (req: str) ->
-  let username = body_field "username" in
-  let password = body_field "password" in
-  if str_eq username "" || str_eq password "" then
-    let _ = http_set_status 400 in "username and password required\n"
-  else
-    match user_find_by_name fd username with
-    | Some _ -> let _ = http_set_status 409 in "username taken\n"
-    | None ->
-      match user_create fd username (hash_pw password) with
-      | None -> let _ = http_set_status 500 in "signup failed\n"
-      | Some u ->
-        let _ = session_login sessions u.username in
-        let _ = http_set_status 201 in json_ok (to_json (user_public u))
+  match (of_json_opt (http_current_body ()) : Credentials option) with
+  | None -> let _ = http_set_status 400 in "username and password required\n"
+  | Some creds ->
+    if str_eq creds.username "" || str_eq creds.password "" then
+      let _ = http_set_status 400 in "username and password required\n"
+    else
+      match user_find_by_name fd creds.username with
+      | Some _ -> let _ = http_set_status 409 in "username taken\n"
+      | None ->
+        match user_create fd creds.username (hash_pw creds.password) with
+        | None -> let _ = http_set_status 500 in "signup failed\n"
+        | Some u ->
+          let _ = session_login sessions u.username in
+          let _ = http_set_status 201 in json_ok (to_json (user_public u))
   ;
 
 let login_h = fn (req: str) ->
-  let username = body_field "username" in
-  let password = body_field "password" in
-  match user_find_by_name fd username with
+  match (of_json_opt (http_current_body ()) : Credentials option) with
   | None -> let _ = http_set_status 401 in "invalid credentials\n"
-  | Some u ->
-    if str_eq u.pw_hash (hash_pw password) then
-      let _ = session_login sessions u.username in json_ok (to_json (user_public u))
-    else
-      let _ = http_set_status 401 in "invalid credentials\n"
+  | Some creds ->
+    match user_find_by_name fd creds.username with
+    | None -> let _ = http_set_status 401 in "invalid credentials\n"
+    | Some u ->
+      if str_eq u.pw_hash (hash_pw creds.password) then
+        let _ = session_login sessions u.username in json_ok (to_json (user_public u))
+      else
+        let _ = http_set_status 401 in "invalid credentials\n"
   ;
 
 let logout_h = fn (req: str) ->
@@ -135,27 +148,28 @@ let post_create_h = fn (req: str) ->
   let user = session_current sessions in
   if str_eq user "" then _unauthorized ()
   else
-    let title = body_field "title" in
-    let body = body_field "body" in
-    let published = str_eq (body_field "published") "true" in
-    if str_eq title "" then
-      let _ = http_set_status 400 in "title required\n"
-    else
-      match post_create fd user title body published with
-      | None -> let _ = http_set_status 500 in "create failed\n"
-      | Some p -> let _ = http_set_status 201 in json_ok (to_json p)
+    match (of_json_opt (http_current_body ()) : NewPost option) with
+    | None -> let _ = http_set_status 400 in "title, body and published required\n"
+    | Some np ->
+      if str_eq np.title "" then
+        let _ = http_set_status 400 in "title required\n"
+      else
+        match post_create fd user np.title np.body np.published with
+        | None -> let _ = http_set_status 500 in "create failed\n"
+        | Some p -> let _ = http_set_status 201 in json_ok (to_json p)
   ;
 
 let comment_create_h = fn (caps: str list) -> fn (req: str) ->
   let pid = parse_int_or_zero (_first_cap caps) in
-  let author = body_field "author" in
-  let body = body_field "body" in
-  if str_eq author "" then
-    let _ = http_set_status 400 in "author required\n"
-  else
-    match comment_create fd pid author body with
-    | None -> let _ = http_set_status 500 in "comment failed\n"
-    | Some c -> let _ = http_set_status 201 in json_ok (to_json c)
+  match (of_json_opt (http_current_body ()) : NewComment option) with
+  | None -> let _ = http_set_status 400 in "author and body required\n"
+  | Some nc ->
+    if str_eq nc.author "" then
+      let _ = http_set_status 400 in "author required\n"
+    else
+      match comment_create fd pid nc.author nc.body with
+      | None -> let _ = http_set_status 500 in "comment failed\n"
+      | Some c -> let _ = http_set_status 201 in json_ok (to_json c)
   ;
 
 // Update / delete require login AND ownership: only a post's own author

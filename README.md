@@ -53,6 +53,13 @@ what this app exercises. Pain found along the way feeds back upstream; see
   so handlers just `to_json p` / `to_json (posts_all fd)`. Two projection
   records stay explicit: `UserPublic` (never serialize `pw_hash`) and
   `PostView` (the post + comments composite). `app.mere` shrank ~40%.
+- ✅ **M10**: typed request decoding. Request bodies were still plucked with
+  a flat `body_field "x"` helper; now they decode into typed records
+  (`Credentials`, `NewPost`, `NewComment`) via **`of_json_opt`** (mere
+  v0.1.7) — the safe, `None`-on-error sibling of `of_json`, so a malformed
+  body returns a 4xx instead of crashing the server. Drove `of_json` /
+  `of_json_opt` upstream (see PAIN B5). **Requires the native build** — the
+  JSON decoders are interp + C only; Wasm `of_json` is a follow-up.
 
 Endpoints: `GET /`, `POST /api/signup`, `POST /api/login`,
 `POST /api/logout`, `GET /api/me`, `GET /api/posts`, `GET /api/posts/:id`,
@@ -61,14 +68,17 @@ Endpoints: `GET /`, `POST /api/signup`, `POST /api/login`,
 
 ## Run the server
 
+Since M10 the request bodies decode with `of_json_opt`, which is interp + C
+only, so **build native** (the `mere -w` wasm path can't compile it yet):
+
 ```bash
-mere -w app.mere > /tmp/app.wat
-wat2wasm --enable-tail-call /tmp/app.wat -o /tmp/app.wasm
-mere serve /tmp/app.wasm            # runs the wasm on the vendored host, :8080
+mere -c app.mere > /tmp/app.c
+clang -O2 -o /tmp/blog /tmp/app.c
+/tmp/blog                           # native TCP + HTTP server, :8080
 
 curl -s localhost:8080/api/posts
 curl -s -X POST localhost:8080/api/posts \
-  -d '{"title":"Hi","body":"...","published":"true"}'
+  -d '{"title":"Hi","body":"...","published":true}'
 curl -s localhost:8080/api/posts/1
 curl -s -X PUT localhost:8080/api/posts/1 \
   -d '{"title":"Edited","body":"...","published":"true"}'

@@ -125,6 +125,34 @@ list literals, and the two JSON arrays use comprehensions
 but underadvertised — a mention in the language tour / a friendlier
 unbalanced-paren diagnostic would have saved the detour.
 
+## B5 🟢 No JSON → typed decode (closed: `of_json` / `of_json_opt`, mere v0.1.7)
+
+`to_json` (B3) closed the *serialize* side, but request bodies were still
+plucked field-by-field with `body_field "username"` — a flat, string-only
+`parse_json_body` helper with no typing, no nesting, and silent `""` for
+missing keys. The symmetric gap: no JSON → typed value decoder.
+
+**Fully closed (mere v0.1.7):** `of_json : str -> 'a` is the structural
+inverse of `to_json` — target type from an annotation, JSON object → record
+fields by name, array → list/tuple, `null`/value → option. But it *fails
+fast* (raises / on native `exit`s) on malformed input, which would crash
+the server on a bad request. So mere grew **`of_json_opt : str -> 'a
+option`** too, which returns `None` on any parse/shape error. `app.mere`'s
+auth/post/comment handlers now decode into typed request records
+(`Credentials`, `NewPost`, `NewComment`) with `of_json_opt`, matching on
+`Some req` / `None -> 400`. Verified end-to-end on the **native binary**:
+a valid body → 201, a malformed body → 4xx, and the server **stays up**
+(the whole point of the `_opt` variant).
+
+The loop: dogfood found the decode gap + that fail-fast is unsafe for
+untrusted input → mere grew `of_json` **and** `of_json_opt` → the app
+dropped `body_field` for typed decoding.
+
+**Known gap:** `of_json` / `of_json_opt` are interp + C only; the Wasm
+backend doesn't have them yet (as with LLVM's missing `to_json`). So this
+app now requires the **native build** (`mere -c | clang`) — the `mere -w`
+wasm path can't compile the JSON decode until Wasm `of_json` lands.
+
 ## Positive: session/cookie auth composed cleanly
 
 M6 added signup / login / logout / me + per-post ownership on top of
