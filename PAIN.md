@@ -66,7 +66,7 @@ desugars a general irrefutable pattern to a single-arm
 Verified across interp + C + Wasm + LLVM. Once a mere release ships this,
 the decoders can go back to the named `Decoded of …` wrapper.
 
-## B3 🟡 No record → JSON serialization; every app hand-rolls it
+## B3 🟢 No record → JSON serialization (fully closed: `to_json`, mere v0.1.6)
 
 M2's HTTP layer builds JSON responses by hand (`jstr` for escaping +
 string concatenation of each field), exactly as `examples/http_todo_pg`
@@ -91,11 +91,21 @@ being sprinkled across every handler's JSON strings.
 into `contrib/orm` (`module Orm`). This repo now `mere install`s it and
 uses `Orm.dec_*` / `Orm.enc_*`, keeping only the pg-specific query runner
 local — so the reduction round-trips: dogfood → language/library fix →
-release → app consumes the package. Longer term a derive would remove even
-the field-by-field wiring. Positive counterpoint: composing `contrib/http` (router,
-json_body) with the typed model layer had **zero friction** — routing,
-path-param captures, and body parsing all fit together cleanly on the
-first try.
+release → app consumes the package. Positive counterpoint: composing
+`contrib/http` (router, json_body) with the typed model layer had **zero
+friction** — routing, path-param captures, and body parsing all fit
+together cleanly on the first try.
+
+**Fully closed (mere v0.1.6 → M9):** the "longer term a derive" became
+real. `to_json` — a structural, compile-time-specialized builtin (the JSON
+sibling of `show`, no trait machinery; interp / C / Wasm) — serializes any
+typed record/list to JSON directly. `app.mere` deleted its per-model
+writers and the `enc_obj` calls; handlers are now just `to_json p` /
+`to_json (posts_all fd)`, and it shrank ~40%. Only two projection records
+stay explicit: `UserPublic` (never leak `pw_hash` — `to_json` on a `User`
+would include it) and `PostView` (the post+comments composite). The full
+loop: dogfood found B3 → mere grew `to_json` → released v0.1.6 → the app
+dropped its JSON layer.
 
 ## B4 🟢 Deep `Cons (…, Cons (…, Nil))` nesting — feature existed, I missed it
 
