@@ -10,6 +10,19 @@ http = { git = "https://github.com/merelang/mere", subdir = "contrib/http", rev 
 db   = { git = "https://github.com/merelang/mere", subdir = "contrib/db",   rev = "v0.1.6" }
 orm  = { git = "https://github.com/merelang/mere", subdir = "contrib/orm",  rev = "v0.1.6" }
 
+# The admin UI (admin.mere) also needs `dom` (the browser bindings) and
+# `json` (a parser for the server's 422 body). They are NOT listed as
+# dependencies yet: it needs the structural DOM + fetch bindings added in
+# mere v0.1.152, and the newest package release is v0.1.9. Until a release
+# carries them, copy them in from a mere checkout:
+#
+#   mkdir -p .mere_modules/dom .mere_modules/json
+#   cp <mere>/contrib/dom/dom.mere <mere>/contrib/dom/dom.glue.js .mere_modules/dom/
+#   cp <mere>/contrib/json/json.mere .mere_modules/json/
+#
+# Once they ship, this becomes two ordinary entries above and the copy
+# step goes away.
+
 # The Node runtime host (scripts + extern glue: http_serve, tcp_connect
 # for pg, …) that runs the compiled .wasm. `mere install` vendors it into
 # .mere_host/ so running the app needs no compiler checkout. `mere serve`

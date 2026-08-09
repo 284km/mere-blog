@@ -79,9 +79,16 @@ Endpoints: `GET /`, `GET /admin`, `POST /api/signup`, `POST /api/login`,
 `POST /api/posts` (auth), `PUT /api/posts/:id` (author only),
 `DELETE /api/posts/:id` (author only), `POST /api/posts/:id/comments`.
 
-The admin UI lives at `/admin`. Build it with
-`mere -w admin.mere > /tmp/admin.wat && wat2wasm --enable-tail-call /tmp/admin.wat -o admin.wasm`
-before starting the server.
+The admin UI lives at `/admin`. It needs `dom` and `json` vendored into
+`.mere_modules/` first — see the note in `mere.toml`, they are not package
+dependencies yet — then:
+
+```bash
+mere -w admin.mere > /tmp/admin.wat
+wat2wasm --enable-tail-call /tmp/admin.wat -o admin.wasm
+```
+
+Build it before starting the server; the server reads `admin.wasm` off disk.
 
 ## Run the server
 
