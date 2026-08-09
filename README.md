@@ -69,7 +69,10 @@ what this app exercises. Pain found along the way feeds back upstream; see
   leaves the page and the message it shows is the message the server would
   have sent. `admin.html` + `admin.wasm` are served by the same native binary
   (`read_file` is binary-safe, so the .wasm goes out through the ordinary
-  response path). Drove four upstream fixes (see PAIN "the current compiler").
+  response path). Runs on **both** backends: the native binary and the wasm
+  host serve the same admin client byte-identically, and its browser checks
+  pass against either. Drove seven upstream fixes (see PAIN "the current
+  compiler").
 
 Endpoints: `GET /`, `GET /admin`, `POST /api/signup`, `POST /api/login`,
 `POST /api/logout`, `GET /api/me`, `GET /api/posts`, `GET /api/posts/:id`,

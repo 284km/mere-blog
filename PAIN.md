@@ -225,6 +225,15 @@ still uses the old closure ABI and the old string layout, so a build made with
 a current compiler links fine and then fails on the first request. A host and a
 compiler have an ABI between them and nothing checks it.
 
-Still open: `of_json` on Wasm is entirely 4-byte-model — runtime and generated
-decoders both — so typed request decoding has no Wasm backend. Native and
-interpreter are unaffected, which is why M11 uses the native build.
+`of_json` on Wasm was the fifth: the parser runtime and every generated decoder
+were still 4-byte-model, so typed request decoding had no Wasm backend and M11
+started out native-only. Rebuilt upstream (mere v0.1.156), along with two more
+of the same shape — `mem_to_str` in the pg host glue, which is where every
+column value becomes a str (an entire result set read back empty), and the
+response-body read, which scanned for a NUL and so truncated a `.wasm` asset at
+its first byte. This app now builds and runs on both backends.
+
+Seven bugs, one shape. What makes them worth writing down is that each one was
+invisible until something downstream measured or concatenated the value:
+`print` formats with `%s` and stops at the NUL, so a broken string prints
+perfectly and then breaks the moment it is used.
