@@ -1,0 +1,72 @@
+// validate.mere — the rules a post has to satisfy, shared by both ends.
+//
+// This module is the point of the admin UI. It is pure Mere with no
+// externs, so it compiles to C inside the server binary and to Wasm
+// inside the browser client. The form checks a draft against exactly the
+// code that will accept or reject it, and the server never trusts the
+// browser to have done so — one definition, two enforcement points,
+// no chance of the pair drifting apart.
+//
+// Errors are returned rather than raised, as `(field, message)` pairs, so
+// a caller can render them next to the input that produced them and the
+// server can hand the same list back as JSON.
+//
+// The limits are byte-oriented on purpose: `str_len` counts bytes and the
+// database columns are sized in bytes, so a title that passes here is a
+// title that fits. A CJK title reaches the limit in fewer characters than
+// an ASCII one, which is the honest reading of a byte budget.
+
+type FieldError = { field: str, message: str };
+
+let title_max = 200;
+let body_max = 20000;
+
+// Mere has no `and`-chaining over optional errors, so each rule appends to
+// an accumulator and the caller sees them in declaration order.
+let validate_post = fn (title: str) -> fn (body: str) ->
+  let t = str_trim title in
+  let b = str_trim body in
+  let e1 =
+    if str_eq t "" then
+      [FieldError { field = "title", message = "title is required" }]
+    else if str_len t > title_max then
+      [FieldError { field = "title",
+                    message = "title must be at most " ++ show title_max ++ " bytes" }]
+    else [] in
+  let e2 =
+    if str_eq b "" then
+      [FieldError { field = "body", message = "body is required" }]
+    else if str_len b > body_max then
+      [FieldError { field = "body",
+                    message = "body must be at most " ++ show body_max ++ " bytes" }]
+    else [] in
+  list_append e1 e2;
+
+let validate_credentials = fn (username: str) -> fn (password: str) ->
+  let u = str_trim username in
+  let e1 =
+    if str_eq u "" then
+      [FieldError { field = "username", message = "username is required" }]
+    else if str_len u > 40 then
+      [FieldError { field = "username", message = "username must be at most 40 bytes" }]
+    else [] in
+  let e2 =
+    if str_len password < 8 then
+      [FieldError { field = "password", message = "password must be at least 8 characters" }]
+    else [] in
+  list_append e1 e2;
+
+let validate_comment = fn (author: str) -> fn (body: str) ->
+  let a = str_trim author in
+  let b = str_trim body in
+  let e1 =
+    if str_eq a "" then
+      [FieldError { field = "author", message = "author is required" }]
+    else [] in
+  let e2 =
+    if str_eq b "" then
+      [FieldError { field = "body", message = "comment body is required" }]
+    else if str_len b > 4000 then
+      [FieldError { field = "body", message = "comment must be at most 4000 bytes" }]
+    else [] in
+  list_append e1 e2;

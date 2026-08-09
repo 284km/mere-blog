@@ -61,10 +61,24 @@ what this app exercises. Pain found along the way feeds back upstream; see
   `of_json_opt` upstream (see PAIN B5); mere v0.1.8 added the Wasm backend,
   so both the wasm and native builds decode request bodies.
 
-Endpoints: `GET /`, `POST /api/signup`, `POST /api/login`,
+- ✅ **M11**: shared validation + a Wasm admin UI. `validate.mere` holds the
+  rules a post, a comment and a credential pair have to satisfy — pure Mere,
+  no externs — and both ends import it. Compiled to C it is what `app.mere`
+  enforces (422 with a `FieldError list` as JSON); compiled to Wasm it is what
+  `admin.mere` checks before it sends anything, so an invalid draft never
+  leaves the page and the message it shows is the message the server would
+  have sent. `admin.html` + `admin.wasm` are served by the same native binary
+  (`read_file` is binary-safe, so the .wasm goes out through the ordinary
+  response path). Drove four upstream fixes (see PAIN "the current compiler").
+
+Endpoints: `GET /`, `GET /admin`, `POST /api/signup`, `POST /api/login`,
 `POST /api/logout`, `GET /api/me`, `GET /api/posts`, `GET /api/posts/:id`,
 `POST /api/posts` (auth), `PUT /api/posts/:id` (author only),
 `DELETE /api/posts/:id` (author only), `POST /api/posts/:id/comments`.
+
+The admin UI lives at `/admin`. Build it with
+`mere -w admin.mere > /tmp/admin.wat && wat2wasm --enable-tail-call /tmp/admin.wat -o admin.wasm`
+before starting the server.
 
 ## Run the server
 

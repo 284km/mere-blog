@@ -18,6 +18,9 @@ import "http/http.mere";
 import "http/router.mere";
 import "http/json_body.mere";
 import "http/session.mere";
+// The rules the admin form checks before it submits. Same module, two
+// compilations: C here, Wasm in the browser client.
+import "validate.mere";
 
 // One connection for the process — the Node host is single-threaded, so a
 // single fd is enough for a demo (a pool would be the next step).
@@ -69,6 +72,15 @@ type NewComment = { author: str, body: str };
 
 // --- response helpers -----------------------------------------------------
 
+// 422 with the field errors as JSON — the shape the admin form renders
+// next to each input. The server runs the same `validate_*` the client
+// ran, because a client that skipped it is exactly the case this catches.
+let json_errors = fn (errs) ->
+  let _ = http_set_status 422 in
+  let _ = http_set_content_type "application/json" in
+  to_json errs ++ "\n"
+  ;
+
 let json_ok = fn (body: str) ->
   let _ = http_set_content_type "application/json" in body ++ "\n"
   ;
@@ -89,9 +101,9 @@ let signup_h = fn (req: str) ->
   match (of_json_opt (http_current_body ()) : Credentials option) with
   | None -> let _ = http_set_status 400 in "username and password required\n"
   | Some creds ->
-    if str_eq creds.username "" || str_eq creds.password "" then
-      let _ = http_set_status 400 in "username and password required\n"
-    else
+    match validate_credentials creds.username creds.password with
+    | Cons (e, es) -> json_errors (Cons (e, es))
+    | Nil ->
       match user_find_by_name fd creds.username with
       | Some _ -> let _ = http_set_status 409 in "username taken\n"
       | None ->
@@ -151,9 +163,9 @@ let post_create_h = fn (req: str) ->
     match (of_json_opt (http_current_body ()) : NewPost option) with
     | None -> let _ = http_set_status 400 in "title, body and published required\n"
     | Some np ->
-      if str_eq np.title "" then
-        let _ = http_set_status 400 in "title required\n"
-      else
+      match validate_post np.title np.body with
+      | Cons (e, es) -> json_errors (Cons (e, es))
+      | Nil ->
         match post_create fd user np.title np.body np.published with
         | None -> let _ = http_set_status 500 in "create failed\n"
         | Some p -> let _ = http_set_status 201 in json_ok (to_json p)
@@ -164,9 +176,9 @@ let comment_create_h = fn (caps: str list) -> fn (req: str) ->
   match (of_json_opt (http_current_body ()) : NewComment option) with
   | None -> let _ = http_set_status 400 in "author and body required\n"
   | Some nc ->
-    if str_eq nc.author "" then
-      let _ = http_set_status 400 in "author required\n"
-    else
+    match validate_comment nc.author nc.body with
+    | Cons (e, es) -> json_errors (Cons (e, es))
+    | Nil ->
       match comment_create fd pid nc.author nc.body with
       | None -> let _ = http_set_status 500 in "comment failed\n"
       | Some c -> let _ = http_set_status 201 in json_ok (to_json c)
@@ -228,6 +240,24 @@ let index_h = fn (req: str) ->
     ++ "</ul></body></html>"
   ;
 
+// The admin client: one page, one Wasm module, one host glue. read_file
+// is binary-safe (a Mere str carries its length), so the .wasm goes out
+// through the same path as the HTML.
+let admin_page = fn (req: str) ->
+  let _ = http_set_content_type "text/html; charset=utf-8" in
+  read_file "admin.html"
+  ;
+
+let admin_wasm = fn (req: str) ->
+  let _ = http_set_content_type "application/wasm" in
+  read_file "admin.wasm"
+  ;
+
+let admin_glue = fn (req: str) ->
+  let _ = http_set_content_type "application/javascript; charset=utf-8" in
+  read_file ".mere_modules/dom/dom.glue.js"
+  ;
+
 let not_found = fn (req: str) ->
   let _ = http_set_status 404 in "not found\n"
   ;
@@ -236,6 +266,9 @@ let not_found = fn (req: str) ->
 
 let routes = [
   route "GET" "/" index_h,
+  route "GET" "/admin" admin_page,
+  route "GET" "/admin.wasm" admin_wasm,
+  route "GET" "/dom.glue.js" admin_glue,
   route "POST" "/api/signup" signup_h,
   route "POST" "/api/login" login_h,
   route "POST" "/api/logout" logout_h,

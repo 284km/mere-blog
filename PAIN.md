@@ -197,3 +197,34 @@ Handlers read like Rails: `post_find fd id` returns a `Post option`,
 (`p.title`, `c.author`) — SQL and raw `(str option list)` rows never
 appear in `app.mere`. The model layer (M1) is what makes the web layer
 (M2) thin.
+
+## The current compiler (M11)
+
+Building the admin UI meant compiling this app with a compiler newer than the
+one `mere.toml` pins, and four things broke at once. All four are the same
+shape: a boundary that was written when a Mere value was 4 bytes and a Mere
+`str` was a plain C string, and was never revisited when both changed.
+
+- **`to_json` had no working Wasm backend.** Every case of the emitter still
+  built 4-byte cells with i32 fields, so wat2wasm rejected any module that
+  serialized anything. Since M9 this app serializes a typed record on every
+  response, so the entire Wasm target was closed to it.
+- **The native HTTP server passed a raw C string as the request line.** A Mere
+  `str` carries its length in the word before byte0, so the handler read "" and
+  every route 404'd. `http_current_body` and `http_get_header` had it too.
+- **`sha256_hex` returned "".** The hex and base64 producers malloc'd their
+  results instead of allocating through the Mere allocator, so every password
+  hash was empty and signup failed with a 500.
+- **A `unit` parameter broke extern closure adapters on C.** `extern fn
+  http_current_body: unit -> str` lowers to a 0-arity C function, but the
+  adapter passed an argument to it and the generated C would not compile.
+
+The lesson is not the individual bugs but that **nothing detected the
+mismatch**. The vendored `.mere_host/` is pinned to a release whose JS glue
+still uses the old closure ABI and the old string layout, so a build made with
+a current compiler links fine and then fails on the first request. A host and a
+compiler have an ABI between them and nothing checks it.
+
+Still open: `of_json` on Wasm is entirely 4-byte-model — runtime and generated
+decoders both — so typed request decoding has no Wasm backend. Native and
+interpreter are unaffected, which is why M11 uses the native build.

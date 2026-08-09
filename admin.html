@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>mere-blog admin</title>
+<style>
+  body { font: 15px/1.6 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.4rem; margin-bottom: .1rem; }
+  .subtitle { color: #555; margin-top: 0; }
+  form { border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+  form.done { opacity: .55; }
+  label { display: block; font-size: .85rem; color: #444; margin-top: .6rem; }
+  input, textarea { font: inherit; width: 100%; box-sizing: border-box; padding: .4em; }
+  textarea { min-height: 6rem; }
+  button { font: inherit; margin-top: .8rem; padding: .4em 1.2em; border: none;
+           border-radius: 5px; background: #2b6cb0; color: #fff; cursor: pointer; }
+  ul { list-style: none; padding: 0; }
+  .errors li { color: #9b2c2c; background: #fff5f5; border: 1px solid #feb2b2;
+               border-radius: 5px; padding: .35em .6em; margin-top: .4rem; font-size: .9rem; }
+  .errors .field { font-weight: 600; margin-right: .5em; }
+  #posts li { display: flex; gap: .75rem; align-items: baseline;
+              border-bottom: 1px solid #edf2f7; padding: .45rem 0; }
+  #posts .title { flex: 1; }
+  #posts .author, #posts .state { font-size: .8rem; color: #666; }
+  #status { display: inline-block; font-size: .85rem; color: #555; }
+</style>
+
+<h1>mere-blog admin</h1>
+<p class="subtitle">
+  The form below checks a draft with <code>validate.mere</code> compiled to
+  Wasm. The server checks it with the same file compiled to C. A draft this
+  page accepts is one the server accepts — not because they were kept in
+  step, but because there is only one copy of the rules.
+</p>
+
+<div id="status">…</div>
+
+<form id="login">
+  <strong>sign in</strong>
+  <label for="username">username</label>
+  <input id="username" autocomplete="username">
+  <label for="password">password</label>
+  <input id="password" type="password" autocomplete="current-password">
+  <ul id="login-errors" class="errors"></ul>
+  <button type="submit">sign in</button>
+</form>
+
+<form id="compose">
+  <strong>new post</strong>
+  <label for="title">title</label>
+  <input id="title">
+  <label for="body">body</label>
+  <textarea id="body"></textarea>
+  <ul id="compose-errors" class="errors"></ul>
+  <button type="submit">publish</button>
+</form>
+
+<h2 style="font-size:1.1rem">posts</h2>
+<ul id="posts"></ul>
+
+<script type="module">
+  import { makeDomGlue } from "/dom.glue.js";
+
+  const stub = () => 0;
+  const base = {
+    puts: () => 0,
+    time: () => Date.now() / 1000,
+    read_file: stub,
+    write_file: stub,
+    __lang_str_of_float: stub,
+    __lang_float_of_str: () => 0.0,
+    __lang_sin: Math.sin, __lang_cos: Math.cos, __lang_tan: Math.tan,
+    __lang_f_pow: Math.pow, __lang_atan2: Math.atan2,
+  };
+
+  const { glue, attach } = makeDomGlue();
+  const bytes = await fetch("/admin.wasm").then((r) => r.arrayBuffer());
+  const { instance } = await WebAssembly.instantiate(bytes, { env: { ...base, ...glue } });
+  attach(instance);
+  instance.exports.main();
+</script>

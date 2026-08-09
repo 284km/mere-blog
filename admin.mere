@@ -1,0 +1,222 @@
+// admin.mere — the authoring UI, compiled to Wasm.
+//
+// The reason this exists is the import three lines down: `validate.mere`
+// is the same file app.mere imports. Compiled to C it is what the server
+// enforces; compiled to Wasm it is what this form checks before it sends
+// anything. A draft that this page accepts is a draft the server accepts,
+// not because the two were kept in sync but because there is only one of
+// them.
+//
+// So the round trip is skipped when the answer is already known, and the
+// server still runs the check, because a client that skipped it is
+// exactly the case a server exists to catch. When the server does reject
+// something, its 422 body is the same `(field, message)` list this file
+// renders — the same type, serialized by to_json on one side and parsed
+// back on the other.
+//
+// Build:
+//   mere -w admin.mere > /tmp/admin.wat
+//   wat2wasm --enable-tail-call /tmp/admin.wat -o admin.wasm
+//
+// Then open http://localhost:8080/admin with app.mere running.
+
+import "dom/dom.mere";
+import "json/json.mere";
+import "validate.mere";
+
+// ---- elements -------------------------------------------------------
+
+let status_el = dom_get_by_id "status" in
+let login_form = dom_get_by_id "login" in
+let username_in = dom_get_by_id "username" in
+let password_in = dom_get_by_id "password" in
+let login_errors = dom_get_by_id "login-errors" in
+
+let compose_form = dom_get_by_id "compose" in
+let title_in = dom_get_by_id "title" in
+let body_in = dom_get_by_id "body" in
+let compose_errors = dom_get_by_id "compose-errors" in
+let posts_el = dom_get_by_id "posts" in
+
+// ---- error rendering ------------------------------------------------
+//
+// One renderer for both sources. Client-side errors arrive as a typed
+// `FieldError list`; server-side ones arrive as JSON and are parsed into
+// the same shape, so neither path gets special treatment downstream.
+
+let clear = fn (el: JsRef) -> dom_set_text el "" in
+
+let rec draw_errors = fn (el: JsRef) -> fn (xs) ->
+  match xs with
+  | Nil -> ()
+  | Cons ((field, message), rest) ->
+    let li = dom_create "li" in
+    let f = dom_create "span" in
+    let _ = dom_set_attr f "class" "field" in
+    let _ = dom_set_text f field in
+    let m = dom_create "span" in
+    let _ = dom_set_text m message in
+    let _ = dom_append li f in
+    let _ = dom_append li m in
+    let _ = dom_append el li in
+    draw_errors el rest
+in
+
+// A typed FieldError list flattened to pairs, so both sources share the
+// renderer above.
+let rec pairs_of_errors = fn (xs: FieldError list) ->
+  match xs with
+  | Nil -> Nil
+  | Cons (e, rest) -> Cons ((e.field, e.message), pairs_of_errors rest)
+in
+
+// ---- JSON helpers ---------------------------------------------------
+
+let jstr_of = fn (v: Json.json) ->
+  match v with
+  | Json.JStr s -> s
+  | Json.JNum n -> show n
+  | Json.JBool b -> if b then "true" else "false"
+  | _ -> ""
+in
+
+let jfield = fn (obj: Json.json) -> fn (key: str) ->
+  match obj with
+  | Json.JObj fields ->
+    let rec look = fn (xs) ->
+      match xs with
+      | Nil -> ""
+      | Cons ((k, v), rest) -> if str_eq k key then jstr_of v else look rest in
+    look fields
+  | _ -> ""
+in
+
+// The server's 422 body: a JSON array of {"field","message"} objects.
+let rec parse_field_errors = fn (xs) ->
+  match xs with
+  | Nil -> Nil
+  | Cons (o, rest) ->
+    Cons ((jfield o "field", jfield o "message"), parse_field_errors rest)
+in
+
+let server_errors = fn (body: str) ->
+  match try_or (fn () -> Json.parse_json body) Json.JNull with
+  | Json.JArr xs -> parse_field_errors xs
+  | _ -> Cons (("server", body), Nil)
+in
+
+// ---- posts ----------------------------------------------------------
+
+let rec draw_posts = fn (xs) ->
+  match xs with
+  | Nil -> ()
+  | Cons (p, rest) ->
+    let li = dom_create "li" in
+    let t = dom_create "span" in
+    let _ = dom_set_attr t "class" "title" in
+    let _ = dom_set_text t (jfield p "title") in
+    let a = dom_create "span" in
+    let _ = dom_set_attr a "class" "author" in
+    let _ = dom_set_text a (jfield p "author") in
+    let s = dom_create "span" in
+    let _ = dom_set_attr s "class" "state" in
+    let _ = dom_set_text s (if str_eq (jfield p "published") "true" then "published" else "draft") in
+    let _ = dom_append li t in
+    let _ = dom_append li a in
+    let _ = dom_append li s in
+    let _ = dom_append posts_el li in
+    draw_posts rest
+in
+
+let refresh = fn (u: unit) ->
+  dom_fetch_async "GET" "/api/posts" "" (fn (body: str) ->
+    let _ = clear posts_el in
+    match try_or (fn () -> Json.parse_json body) Json.JNull with
+    | Json.JArr xs -> draw_posts xs
+    | _ -> dom_set_text status_el "could not read the post list")
+in
+
+// ---- JSON request bodies --------------------------------------------
+//
+// Built by hand rather than with to_json: these are request shapes, not
+// model records, and the escaping needed is a quote and a backslash.
+
+let rec esc_go = fn (s: str) -> fn (i: int) -> fn (acc: str) ->
+  if i == str_len s then acc
+  else
+    let c = substring s i (i + 1) in
+    let piece =
+      if str_eq c "\"" then "\\\""
+      else if str_eq c "\\" then "\\\\"
+      else if str_eq c "\n" then "\\n"
+      else if str_eq c "\t" then "\\t"
+      else c in
+    esc_go s (i + 1) (acc ++ piece)
+in
+let jq = fn (s: str) -> "\"" ++ esc_go s 0 "" ++ "\"" in
+
+// ---- login ----------------------------------------------------------
+
+let do_login = fn (u: unit) ->
+  let name = dom_input_value username_in in
+  let pass = dom_input_value password_in in
+  let _ = clear login_errors in
+  // The same rules the server will apply, applied first — a password
+  // that is too short never leaves the page.
+  match validate_credentials name pass with
+  | Cons (e, es) -> draw_errors login_errors (pairs_of_errors (Cons (e, es)))
+  | Nil ->
+    let payload = "\{" ++ jq "username" ++ ":" ++ jq name ++ ","
+                       ++ jq "password" ++ ":" ++ jq pass ++ "}" in
+    let _ = dom_fetch_header "Content-Type" "application/json" in
+    dom_fetch_async "POST" "/api/login" payload (fn (body: str) ->
+      if dom_fetch_status () == 200 then
+        let _ = dom_set_text status_el ("signed in as " ++ jfield (try_or (fn () -> Json.parse_json body) Json.JNull) "username") in
+        let _ = dom_set_attr login_form "class" "done" in
+        refresh ()
+      else if dom_fetch_status () == 422 then
+        draw_errors login_errors (server_errors body)
+      else
+        dom_set_text status_el "sign-in failed")
+in
+
+// ---- create a post --------------------------------------------------
+
+let do_compose = fn (u: unit) ->
+  let title = dom_input_value title_in in
+  let body = dom_input_value body_in in
+  let _ = clear compose_errors in
+  match validate_post title body with
+  | Cons (e, es) ->
+    // No request is made: the answer is already known, and it is the
+    // server's answer because it is the server's function.
+    draw_errors compose_errors (pairs_of_errors (Cons (e, es)))
+  | Nil ->
+    let payload = "\{" ++ jq "title" ++ ":" ++ jq title ++ ","
+                       ++ jq "body" ++ ":" ++ jq body ++ ","
+                       ++ "\"published\":true}" in
+    let _ = dom_fetch_header "Content-Type" "application/json" in
+    dom_fetch_async "POST" "/api/posts" payload (fn (resp: str) ->
+      if dom_fetch_status () == 201 then
+        let _ = dom_set_value title_in "" in
+        let _ = dom_set_value body_in "" in
+        let _ = dom_set_text status_el "post created" in
+        refresh ()
+      else if dom_fetch_status () == 422 then
+        // The server rejected something the client accepted. With one
+        // shared module that should be unreachable, so surfacing it
+        // plainly is how a drift would be noticed.
+        draw_errors compose_errors (server_errors resp)
+      else if dom_fetch_status () == 401 then
+        dom_set_text status_el "sign in first"
+      else
+        dom_set_text status_el "create failed")
+in
+
+// ---- startup --------------------------------------------------------
+
+let _ = dom_on_submit login_form do_login in
+let _ = dom_on_submit compose_form do_compose in
+let _ = dom_set_text status_el "not signed in" in
+let _ = refresh () in
+0
