@@ -237,3 +237,23 @@ Seven bugs, one shape. What makes them worth writing down is that each one was
 invisible until something downstream measured or concatenated the value:
 `print` formats with `%s` and stops at the NUL, so a broken string prints
 perfectly and then breaks the moment it is used.
+
+## Pinning to a newer revision (M11)
+
+Repointing the dependencies at a current commit surfaced one more: `mere
+install` clones a dependency's repo once and caches it, keyed by
+repo-and-rev, but never fetches into an existing cache. So the first
+install after a new commit is pushed fails with
+
+```
+fatal: reference is not a tree: 6ab39ac7…
+```
+
+and the only remedy was deleting `~/.mere/cache` by hand. Fixed upstream by
+fetching before checkout. Worth noting that the failure mode is a git error
+with no mention of the cache, which is a long way from the cause.
+
+With that fixed, `mere install` pins every dependency and the host runtime to
+one commit, and `mere serve` runs the app on it — the packaged path works again
+end to end, which it had not since the compiler's value representation moved
+past the pinned host.
