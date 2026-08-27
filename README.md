@@ -123,9 +123,16 @@ SHA-256), the whole app compiles to one native binary — no Node, no Wasm:
 
 ```bash
 mere -c app.mere > app.c
-clang -O2 app.c -o mere-blog        # ~264 KB, statically self-contained
-./mere-blog                          # serves :8080, talks to Postgres directly
+clang -O2 app.c -lssl -lcrypto -o mere-blog   # ~330 KB
+./mere-blog                                   # serves :8080, talks to Postgres directly
 ```
+
+`-lssl -lcrypto` is not optional, and this line said so only after `verify.sh`
+was written and would not build. `contrib/http` carries a TLS client, so the
+emitted C includes `<openssl/ssl.h>` whether or not this app opens a TLS
+socket. On a machine where Homebrew's OpenSSL is not on the default search
+path, add `-I$(brew --prefix openssl@3)/include -L$(brew --prefix openssl@3)/lib`
+— which is what `verify.sh` does rather than assume.
 
 The C backend supplies native implementations for the `tcp_*` / `mem_*`
 (pg wire protocol over a Wasm-style byte arena), `http_serve` (a POSIX

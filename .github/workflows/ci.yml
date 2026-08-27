@@ -1,0 +1,72 @@
+name: CI
+
+# WHY THIS EXISTS. This repository had no CI and no tests. merelang/mere's CI
+# checks that its `main` still COMPILES this code (test/downstream/REPOS), but
+# "does it build" and "does it still answer HTTP the way its milestones say,
+# against a real database" are different questions.
+#
+# THE ORACLES ARE EXTERNAL: curl speaks the HTTP and PostgreSQL stores the
+# rows. Nothing is compared against a recording of this app's own past output.
+# What is asserted is documented behaviour and its effects -- created then
+# readable, updated then changed, deleted then gone, and a second user refused
+# with 403 rather than 401 or 200.
+
+on:
+  push:
+  pull_request:
+  # The compiler moves daily and this repository does not, so a weekly run
+  # catches the case where nothing here changed and it broke anyway.
+  schedule:
+    - cron: "0 3 * * 1"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # BUILT FROM main, NOT FROM THE LATEST RELEASE -- this repository is
+      # developed against the compiler as it is. The cost is that a break
+      # upstream reddens this repository too, which is the truth of the
+      # dependency; merelang/mere's downstream_check tells the two apart from
+      # the other side.
+      - name: Check out the Mere compiler
+        uses: actions/checkout@v5
+        with:
+          repository: merelang/mere
+          path: .mere-compiler
+
+      - name: Set up OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.1"
+
+      - name: Build mere
+        run: |
+          cd .mere-compiler
+          opam install . --deps-only
+          opam exec -- dune build bin/mere.exe
+
+      # PostgreSQL as BINARIES, not as a service: verify.sh runs its own
+      # throwaway cluster with initdb on the port app.mere names, so there is
+      # no state carried between runs and nothing shared to collide over.
+      # libssl-dev because contrib/http carries a TLS client, so the emitted C
+      # includes <openssl/ssl.h> whether or not this app opens a TLS socket.
+      - name: PostgreSQL and OpenSSL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql postgresql-client libssl-dev netcat-openbsd
+          echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
+
+      # `mere install` fetches http / db / orm into .mere_modules/ per mere.toml.
+      - name: Fetch dependencies
+        run: .mere-compiler/_build/default/bin/mere.exe install
+
+      # MEASURED before wiring it: 16 checks -- signup, session, duplicate
+      # signup, create, show, update and its persistence, comment and the join,
+      # ownership refused on both verbs, an anonymous delete refused, the
+      # owner's delete, the 404 after it, and logout.
+      - name: verify.sh — mere-blog over HTTP against Postgres
+        run: MERE="$GITHUB_WORKSPACE/.mere-compiler/_build/default/bin/mere.exe" CC=clang sh verify.sh
