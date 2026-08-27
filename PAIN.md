@@ -198,6 +198,39 @@ Handlers read like Rails: `post_find fd id` returns a `Post option`,
 appear in `app.mere`. The model layer (M1) is what makes the web layer
 (M2) thin.
 
+## B6 🟢 A native binary could not be configured, and could not answer TLS
+
+Two things this app did that read as ordinary application code and were in fact the
+only thing the compiler allowed:
+
+```mere
+let fd = pg_connect "127.0.0.1" 15499 "postgres" "" "blog";   // app.mere, before
+let _  = http_serve 8080 handle;
+```
+
+**The literals were not laziness.** Until mere v0.1.337 the C backend had no lowering
+for `env_var` — it existed in the interpreter and on the Wasm *component* backend, so
+it looked implemented — which meant a `mere -c` binary had no way to be told anything
+at startup. Changing a database host meant editing this file and recompiling it. Three
+files each kept their own copy of the same five constants, which is what a language
+without configuration does to a codebase.
+
+**The plaintext was not a deployment choice.** Until v0.1.338 `tcp_starttls` could
+upgrade a socket this program had dialled, but nothing could answer a TLS connection.
+`grep tcp_starttls` finds TLS in the tree, so the surface looked complete.
+
+**What made both durable is the same thing, and it is the finding.** Neither was ever
+written down. This README did not recommend a proxy, did not mention TLS for serving,
+did not note that the constants were unchangeable. It said `serves :8080` and moved on.
+A missing capability that nobody tries to use produces no workaround — and a workaround
+is the artifact that would have made it visible. The gaps were not hidden behind
+anything; there was nothing in their place.
+
+Both are closed. `config.mere` reads the environment; `http_serve_tls` terminates TLS
+in-process. `verify.sh` now passes the app a port that is deliberately **not** its
+default, so the configuration is checked by being used rather than asserted, and adds
+four TLS checks driven by curl without `-k`.
+
 ## The current compiler (M11)
 
 Building the admin UI meant compiling this app with a compiler newer than the

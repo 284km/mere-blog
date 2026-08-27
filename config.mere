@@ -1,0 +1,49 @@
+// config.mere — where this app's configuration comes from.
+//
+// It used to come from these files. `app.mere` opened with
+//
+//     let fd = pg_connect "127.0.0.1" 15499 "postgres" "" "blog";
+//
+// and served on a literal 8080, and `migrate.mere` and `demo.mere` each kept
+// their own copy of the same constants. That was not the app being careless:
+// until mere v0.1.337 the C backend had no `env_var`, so a native binary
+// genuinely could not be told anything at startup. The only way to change a
+// deployment was to edit the source and recompile it.
+//
+// Both halves of that are gone now — v0.1.337 gave native binaries the
+// environment, and v0.1.338 let a Mere program terminate TLS itself — so this
+// file is what the app looks like when it stops working around them.
+//
+// DEFAULTS MATCH WHAT WAS HARDCODED, so every command in the README keeps
+// working with no environment set at all. The names are Postgres's own
+// (PGHOST, PGPORT, …) so `psql` and this app read the same environment.
+//
+// ONE CAVEAT, and it is visible rather than silent: plain Wasm answers None to
+// `env_var` on every host, so under `node .mere_host/run_http_server.js` these
+// are always the defaults. `app.mere` prints what it resolved at startup, so
+// the difference shows up in the log rather than as a connection to the wrong
+// database.
+
+let env_or = fn (name: str) -> fn (dflt: str) ->
+  match env_var name with
+  | Some v -> if str_len v > 0 then v else dflt
+  | None -> dflt;
+
+let env_int = fn (name: str) -> fn (dflt: int) ->
+  match env_var name with
+  | Some v -> if str_len v > 0 then int_of_str v else dflt
+  | None -> dflt;
+
+let db_host = env_or "PGHOST" "127.0.0.1";
+let db_port = env_int "PGPORT" 15499;
+let db_user = env_or "PGUSER" "postgres";
+let db_pass = env_or "PGPASSWORD" "";
+let db_name = env_or "PGDATABASE" "blog";
+
+let http_port = env_int "PORT" 8080;
+
+// Set both to serve HTTPS directly. Empty means plaintext — which is still
+// the right answer behind a load balancer that terminates TLS for you; the
+// point is that it is now a choice rather than the only thing possible.
+let tls_cert = env_or "TLS_CERT" "";
+let tls_key  = env_or "TLS_KEY" "";

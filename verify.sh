@@ -24,11 +24,25 @@ set -u
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 MERE="${MERE:-mere}"
 CC="${CC:-clang}"
-PGPORT_APP=15499
-HTTP_PORT=8080
+# DELIBERATELY NOT THE DEFAULTS. app.mere's built-in values are 15499 and 8080;
+# these are not, and they reach the app only through the environment. So if
+# env_var stopped working the app would bind 8080 and talk to 15499, this
+# script would be asking a different port, and every check below would fail.
+# The configuration is tested by being used rather than by being asserted.
+PGPORT_APP=15501
+HTTP_PORT=18080
 for t in "$MERE" "$CC" curl initdb pg_ctl createdb; do
   command -v "$t" >/dev/null 2>&1 || { echo "verify: missing $t" >&2; exit 1; }
 done
+
+# The app reads these (config.mere). Until mere v0.1.337 the C backend had no
+# env_var at all, so these values had to be edited into the source -- which is
+# why this script used to have to match constants compiled into the binary.
+export PGHOST=127.0.0.1
+export PGPORT="$PGPORT_APP"
+export PGUSER=postgres
+export PGDATABASE=blog
+export PORT="$HTTP_PORT"
 
 TMP="$(mktemp -d)"
 pgdata="$TMP/pg"
@@ -42,7 +56,7 @@ trap cleanup EXIT
 
 busy() { curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$1/" 2>/dev/null; }
 if nc -z 127.0.0.1 "$PGPORT_APP" 2>/dev/null; then
-  echo "verify: port $PGPORT_APP is in use, and app.mere hardcodes it" >&2; exit 1; fi
+  echo "verify: port $PGPORT_APP is in use" >&2; exit 1; fi
 if nc -z 127.0.0.1 "$HTTP_PORT" 2>/dev/null; then
   echo "verify: port $HTTP_PORT is in use, and app.mere hardcodes it" >&2; exit 1; fi
 
@@ -155,6 +169,50 @@ c=$(code "$B/api/posts/$id")
 curl -s -b "$ck1" -c "$ck1" -X POST "$B/api/logout" >/dev/null
 r=$(curl -s -b "$ck1" "$B/api/me")
 case "$r" in *"login required"*) ok logout "the session is over" ;; *) bad logout "[$r]" ;; esac
+
+# --- the app terminates TLS itself (mere v0.1.338) --------------------------
+# It used to serve cleartext, because a Mere program could dial a TLS
+# connection but not answer one. This restarts the same binary with a
+# certificate and asks curl -- WITHOUT -k, so the certificate presented has to
+# be the one we generated.
+if command -v openssl >/dev/null 2>&1; then
+  kill "$app_pid" 2>/dev/null; app_pid=""
+  openssl req -x509 -newkey rsa:2048 -keyout "$TMP/key.pem" -out "$TMP/cert.pem" \
+    -days 2 -nodes -subj "/CN=localhost" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" >/dev/null 2>&1
+  TLS_PORT=$((HTTP_PORT + 1))
+  PORT="$TLS_PORT" TLS_CERT="$TMP/cert.pem" TLS_KEY="$TMP/key.pem" \
+    "$TMP/blog" > "$TMP/blogtls.log" 2>&1 &
+  app_pid=$!
+  disown "$app_pid" 2>/dev/null || true
+  S="https://localhost:$TLS_PORT"
+  CA="--cacert $TMP/cert.pem --resolve localhost:$TLS_PORT:127.0.0.1"
+
+  c=$(curl -s $CA --retry 40 --retry-delay 1 --retry-connrefused --max-time 8 \
+        -o /dev/null -w '%{http_code}' "$S/api/posts")
+  [ "$c" = 200 ] && ok tls-api "the API answers over a verified TLS connection" \
+                 || bad tls-api "got $c"
+
+  # A file route as well as a JSON one: http_send_file writes straight to the
+  # connection instead of returning a body, so it is the path most likely to
+  # be left writing cleartext while every JSON response still looks right.
+  r=$(curl -s $CA --max-time 8 "$S/admin")
+  case "$r" in *"mere-blog admin"*) ok tls-file "http_send_file's bytes survive TLS" ;;
+                *) bad tls-file "[$(printf '%s' "$r" | cut -c1-60)]" ;; esac
+
+  # And the negative, so the two above mean something: a client that does not
+  # trust our CA must be refused.
+  c=$(curl -s --resolve "localhost:$TLS_PORT:127.0.0.1" --max-time 8 \
+        -o /dev/null -w '%{http_code}' "$S/api/posts" 2>/dev/null || true)
+  [ "$c" = 200 ] && bad tls-verify "an untrusted client still got 200" \
+                 || ok tls-verify "a client without our CA is refused ($c)"
+
+  grep -q "serving https on :$TLS_PORT" "$TMP/blogtls.log" \
+    && ok tls-config "the port and certificate came from the environment" \
+    || bad tls-config "[$(head -3 "$TMP/blogtls.log" | tr '\n' ' ')]"
+else
+  echo "  SKIP  tls               openssl not found — four TLS checks did not run"
+fi
 
 echo "verify: $pass passed, $fail failed  (oracles: $(curl --version | head -1 | cut -d' ' -f1-2), $(psql --version))"
 [ "$fail" -eq 0 ]

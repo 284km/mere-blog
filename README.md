@@ -116,6 +116,41 @@ curl -s -X DELETE localhost:8080/api/posts/1
 `mere serve` uses the runtime host vendored into `.mere_host/` by
 `mere install` (no compiler checkout needed at runtime).
 
+## Configuration, and serving TLS
+
+Nothing is compiled in. `config.mere` reads the environment, using Postgres's own
+names so `psql` and this app read the same variables, and the defaults are the values
+that used to be literals in the source — so every command above still works with an
+empty environment.
+
+| variable | default | what it is |
+|---|---|---|
+| `PGHOST` / `PGPORT` | `127.0.0.1` / `15499` | where Postgres is |
+| `PGUSER` / `PGPASSWORD` / `PGDATABASE` | `postgres` / *(empty)* / `blog` | who and which database |
+| `PORT` | `8080` | the port to serve on |
+| `TLS_CERT` / `TLS_KEY` | *(empty)* | PEM paths; set both to serve HTTPS |
+
+```bash
+PORT=8443 TLS_CERT=cert.pem TLS_KEY=key.pem ./blog
+curl --cacert cert.pem https://localhost:8443/api/posts
+```
+
+With `TLS_CERT` and `TLS_KEY` set, the app terminates TLS itself — the handshake
+happens in the process, and the handler is the same one the plaintext path uses.
+
+**Both of these are new, and both were compiler gaps rather than choices here.** Until
+mere v0.1.337 the C backend had no `env_var`, so a native binary genuinely could not be
+told anything at startup; the only way to change a deployment was to edit the source
+and recompile. Until v0.1.338 a Mere program could dial a TLS connection but not answer
+one. Neither limitation was written down anywhere — this README said `serves :8080` and
+moved on — which is exactly why they lasted: a capability nobody asks for leaves no
+workaround behind, and therefore no trace that anything is missing.
+
+On the Node/Wasm host the environment is not readable (plain Wasm answers `None` to
+`env_var` on every host), so the defaults apply there. The app prints what it resolved
+at startup, so that shows up in the log rather than as a connection to the wrong
+database.
+
 ## Run as a single native binary (no Node)
 
 With Mere ≥ v0.1.6 (native full-stack: native TCP + HTTP server +

@@ -9,15 +9,14 @@
 //   wat2wasm --enable-tail-call /tmp/m.wat -o /tmp/m.wasm
 //   node .mere_host/run_wasm.js /tmp/m.wasm
 //
-// Assumes a trust-auth Postgres on 127.0.0.1:15499, database "blog".
+// Assumes a trust-auth Postgres on 127.0.0.1:15499, database "blog" -- or
+// wherever PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE point.
 
 import "db/pg.mere";
+import "config.mere";
 
-let db_host = "127.0.0.1";
-let db_port = 15499;
-let db_user = "postgres";
-let db_pass = "";
-let db_name = "blog";
+// Connection settings: see config.mere. Defaults are what this file used to
+// hardcode, so nothing in the README needs an environment set.
 
 // DDL run as simple queries (no params). Order matters: comments -> posts
 // on drop (FK), posts -> comments on create.

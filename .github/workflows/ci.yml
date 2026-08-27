@@ -50,8 +50,9 @@ jobs:
           opam exec -- dune build bin/mere.exe
 
       # PostgreSQL as BINARIES, not as a service: verify.sh runs its own
-      # throwaway cluster with initdb on the port app.mere names, so there is
-      # no state carried between runs and nothing shared to collide over.
+      # throwaway cluster with initdb on a port it picks and passes to the app
+      # through the environment, so there is no state carried between runs and
+      # nothing shared to collide over.
       # libssl-dev because contrib/db's pg.mere declares `tcp_starttls` for
       # sslmode negotiation and the emitted C calls it, so the OpenSSL runtime
       # is compiled in. Not contrib/http, as this comment first said -- checked
@@ -69,6 +70,9 @@ jobs:
       # MEASURED before wiring it: 16 checks -- signup, session, duplicate
       # signup, create, show, update and its persistence, comment and the join,
       # ownership refused on both verbs, an anonymous delete refused, the
-      # owner's delete, the 404 after it, and logout.
+      # owner's delete, the 404 after it, and logout. Plus four more since
+      # v0.1.338: the API and a file route over a VERIFIED TLS connection, an
+      # untrusted client refused, and the port/certificate arriving from the
+      # environment.
       - name: verify.sh — mere-blog over HTTP against Postgres
         run: MERE="$GITHUB_WORKSPACE/.mere-compiler/_build/default/bin/mere.exe" CC=clang sh verify.sh
