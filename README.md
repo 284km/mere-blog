@@ -128,9 +128,13 @@ clang -O2 app.c -lssl -lcrypto -o mere-blog   # ~330 KB
 ```
 
 `-lssl -lcrypto` is not optional, and this line said so only after `verify.sh`
-was written and would not build. `contrib/http` carries a TLS client, so the
-emitted C includes `<openssl/ssl.h>` whether or not this app opens a TLS
-socket. On a machine where Homebrew's OpenSSL is not on the default search
+was written and would not build. It is `contrib/db` that brings TLS in, not
+`contrib/http` as this note first said: `pg.mere` declares `tcp_starttls` for
+`sslmode` negotiation and the emitted C calls it in `_pg_send_ssl_request`, so
+the OpenSSL runtime is compiled in and has to be linked. The C backend decides
+this per program -- a program that declares no `tcp_starttls*` extern keeps the
+plaintext path and needs no OpenSSL -- so the dependency is real here rather
+than blanket. On a machine where Homebrew's OpenSSL is not on the default search
 path, add `-I$(brew --prefix openssl@3)/include -L$(brew --prefix openssl@3)/lib`
 — which is what `verify.sh` does rather than assume.
 
