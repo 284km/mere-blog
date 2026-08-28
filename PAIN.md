@@ -244,9 +244,10 @@ different claims and only the first had ever been checked.
   next step". It was not a missing optimisation: two requests interleaving on one
   Postgres socket corrupt the protocol. It was correct only because the loop was
   sequential.
-- **Sessions in a `Map`.** Concurrent SET/GET on a lock-free array lose writes. The
-  compiler does not catch it — `Map` is not classified as unshareable (mere Q-080) —
-  so this would have raced silently.
+- **Sessions in a `Map`.** Concurrent SET/GET on a lock-free array lose writes, and
+  this would have raced silently. The compiler catches a `Map` that `spawn` captures
+  directly, and does not catch one inside a handler closure, because a function type
+  carries nothing about what it closed over (mere Q-080).
 
 Both are fixed by the same idea, and it is not a pool: `http_serve_mt_ctx` gives each
 worker its own context, built once by that worker and never shared. The number of

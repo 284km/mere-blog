@@ -8,8 +8,11 @@
 //   1. The server now serves requests concurrently (mere v0.1.340), and that
 //      Map was shared by every request. Concurrent SET/GET on a lock-free array
 //      lose writes -- so two people logging in at once could lose a session, and
-//      NOTHING WOULD SAY SO. The compiler does not catch it either: Map is not
-//      !Send (Q-080 upstream).
+//      NOTHING WOULD SAY SO. The compiler does not catch this one either, and
+//      the reason is narrower than it first looked: `spawn` DOES refuse a Map it
+//      captures directly, but a value one level inside a captured closure is
+//      classified by that closure's arrow type, which says nothing about what it
+//      captured. A request handler is exactly one level in (Q-080 upstream).
 //   2. Sessions did not survive a restart, and could not be shared by two
 //      processes, so the app could not be run as more than one.
 //

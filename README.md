@@ -152,8 +152,9 @@ Two things in this app were only correct *because* of that:
   is what a connection pool is here, with no checkout, no return, and no way for a
   failing handler to lose one.
 - **sessions in a process-local `Map`.** Concurrent writes to it lose entries, and
-  nothing reports that: the compiler does not classify `Map` as unshareable
-  (merelang/mere Q-080). They live in a `sessions` table now, which also means they
+  nothing reports that. The compiler *does* refuse a `Map` that `spawn` captures
+  directly — but a handler's captures are one level inside a closure, and a function
+  type says nothing about what it closed over (merelang/mere Q-080). They live in a `sessions` table now, which also means they
   survive a restart and could be shared by more than one process. `verify.sh` checks
   the restart, because a race is not something a gate can assert and a restart is.
 
