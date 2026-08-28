@@ -228,8 +228,12 @@ c=$(code -X POST "$B/api/login" -d "{\"username\":\"$us2\",\"password\":\"wrong\
 # server, and present the same cookie.
 ck3="$TMP/ck3"
 u3="carol$$"
+# AT LEAST 8 CHARACTERS: validate.mere refuses shorter ones. The first draft of
+# this block used "pw", so signup failed, and the two checks below reported "the
+# session did not survive" about a session that had never been created -- a
+# harness bug wearing the failure message of the thing under test.
 curl -s -c "$ck3" -X POST "$B/api/signup" \
-  -d "{\"username\":\"$u3\",\"password\":\"pw\"}" >/dev/null
+  -d "{\"username\":\"$u3\",\"password\":\"restart-me\"}" >/dev/null
 r=$(curl -s -b "$ck3" "$B/api/me")
 case "$r" in *"$u3"*) ok session-pre "signed up and logged in" ;;
               *) bad session-pre "[$r]" ;; esac
