@@ -1,0 +1,57 @@
+// session_pg.mere -- cookie sessions kept in Postgres.
+//
+// WHY THIS REPLACED THE IN-MEMORY STORE. `contrib/http/session` keeps sessions
+// in a `map str str`, and says in its own header that "a production deployment
+// would swap the store for a KV / PG-backed implementation with the same fn
+// shape". Two things made that stop being optional here:
+//
+//   1. The server now serves requests concurrently (mere v0.1.340), and that
+//      Map was shared by every request. Concurrent SET/GET on a lock-free array
+//      lose writes -- so two people logging in at once could lose a session, and
+//      NOTHING WOULD SAY SO. The compiler does not catch it either: Map is not
+//      !Send (Q-080 upstream).
+//   2. Sessions did not survive a restart, and could not be shared by two
+//      processes, so the app could not be run as more than one.
+//
+// The store is the connection: `session_pg_* fd`. Each worker has its own
+// connection, so nothing about sessions crosses a thread boundary either.
+import "db/pg.mere";
+import "http/cookie.mere";
+
+extern fn http_get_header: str -> str;
+extern fn http_set_header: str -> str -> unit;
+extern fn gen_request_id: unit -> str;
+
+// HttpOnly so a script cannot read it; SameSite=Lax so it is not sent on
+// cross-site POSTs. Neither was set by the in-memory store this replaces.
+let _sess_cookie = fn (sid: str) ->
+  "session=" ++ sid ++ "; Path=/; HttpOnly; SameSite=Lax";
+
+let session_pg_current = fn (fd: int) ->
+  let sid = session_id (http_get_header "Cookie") in
+  if str_eq sid "" then ""
+  else
+    match pg_query_params fd "SELECT username FROM sessions WHERE sid = $1" [Some sid] with
+    | Nil -> ""
+    | Cons (row, _) ->
+      (match row with
+       | Cons (Some u, _) -> u
+       | _ -> "")
+  ;
+
+let session_pg_login = fn (fd: int) -> fn (user: str) ->
+  let sid = gen_request_id () in
+  let _ = pg_query_params fd
+            "INSERT INTO sessions (sid, username) VALUES ($1, $2)"
+            [Some sid, Some user] in
+  let _ = http_set_header "Set-Cookie" (_sess_cookie sid) in
+  sid
+  ;
+
+let session_pg_logout = fn (fd: int) ->
+  let sid = session_id (http_get_header "Cookie") in
+  let _ =
+    if str_eq sid "" then Nil
+    else pg_query_params fd "DELETE FROM sessions WHERE sid = $1" [Some sid] in
+  http_set_header "Set-Cookie" "session=; Path=/; Max-Age=0"
+  ;

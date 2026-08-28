@@ -43,6 +43,10 @@ export PGPORT="$PGPORT_APP"
 export PGUSER=postgres
 export PGDATABASE=blog
 export PORT="$HTTP_PORT"
+# Four workers rather than the default eight: enough that a session created on
+# one must be found by another, small enough that four Postgres connections is
+# not a surprise on a CI runner.
+export HTTP_WORKERS=4
 
 TMP="$(mktemp -d)"
 pgdata="$TMP/pg"
@@ -169,6 +173,51 @@ c=$(code "$B/api/posts/$id")
 curl -s -b "$ck1" -c "$ck1" -X POST "$B/api/logout" >/dev/null
 r=$(curl -s -b "$ck1" "$B/api/me")
 case "$r" in *"login required"*) ok logout "the session is over" ;; *) bad logout "[$r]" ;; esac
+
+# --- sessions outlive the process (mere v0.1.340) ---------------------------
+# THE CHECK THAT ONLY THE DATABASE-BACKED STORE PASSES. The old store was a
+# process-local Map: correct-looking under a sequential server, lost on restart,
+# and impossible to share between two processes. A concurrent server made it
+# worse -- concurrent SET/GET on a lock-free array lose writes -- but that is a
+# race, and a race is not what a gate can assert. THIS is: log in, restart the
+# server, and present the same cookie.
+ck3="$TMP/ck3"
+u3="carol$$"
+curl -s -c "$ck3" -X POST "$B/api/signup" \
+  -d "{\"username\":\"$u3\",\"password\":\"pw\"}" >/dev/null
+r=$(curl -s -b "$ck3" "$B/api/me")
+case "$r" in *"$u3"*) ok session-pre "signed up and logged in" ;;
+              *) bad session-pre "[$r]" ;; esac
+
+kill "$app_pid" 2>/dev/null; app_pid=""
+"$TMP/blog" > "$TMP/blog2.log" 2>&1 &
+app_pid=$!
+disown "$app_pid" 2>/dev/null || true
+i=0
+until curl -s -o /dev/null --max-time 1 "$B/api/posts" 2>/dev/null; do
+  i=$((i + 1)); [ "$i" -gt 200 ] && { echo "verify: the app did not come back up"; sed -n '1,5p' "$TMP/blog2.log"; exit 1; }; sleep 0.1
+done
+r=$(curl -s -b "$ck3" "$B/api/me")
+case "$r" in *"$u3"*) ok session-restart "the same cookie still works after a restart" ;;
+              *) bad session-restart "the session did not survive [$r]" ;; esac
+
+# And that several workers agree about it: eight requests at once, each of which
+# may land on a different worker with its own database connection.
+conc_ok=1
+i=0
+while [ $i -lt 8 ]; do
+  ( curl -s -b "$ck3" "$B/api/me" > "$TMP/me$i" ) &
+  i=$((i + 1))
+done
+wait
+i=0
+while [ $i -lt 8 ]; do
+  grep -q "$u3" "$TMP/me$i" 2>/dev/null || conc_ok=0
+  i=$((i + 1))
+done
+[ "$conc_ok" -eq 1 ] \
+  && ok session-workers "eight concurrent requests all see the session" \
+  || bad session-workers "some worker did not see the session"
 
 # --- the app terminates TLS itself (mere v0.1.338) --------------------------
 # It used to serve cleartext, because a Mere program could dial a TLS

@@ -42,6 +42,12 @@ let db_name = env_or "PGDATABASE" "blog";
 
 let http_port = env_int "PORT" 8080;
 
+// How many workers the server runs, and therefore how many database
+// connections it opens: one per worker, built by that worker and never shared
+// (see app.mere). Before mere v0.1.340 the accept loop was sequential, so the
+// answer was always one and there was nothing to configure.
+let http_workers = env_int "HTTP_WORKERS" 8;
+
 // Set both to serve HTTPS directly. Empty means plaintext — which is still
 // the right answer behind a load balancer that terminates TLS for you; the
 // point is that it is now a choice rather than the only thing possible.

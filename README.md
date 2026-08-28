@@ -128,6 +128,7 @@ empty environment.
 | `PGHOST` / `PGPORT` | `127.0.0.1` / `15499` | where Postgres is |
 | `PGUSER` / `PGPASSWORD` / `PGDATABASE` | `postgres` / *(empty)* / `blog` | who and which database |
 | `PORT` | `8080` | the port to serve on |
+| `HTTP_WORKERS` | `8` | workers, and therefore Postgres connections: one per worker |
 | `TLS_CERT` / `TLS_KEY` | *(empty)* | PEM paths; set both to serve HTTPS |
 
 ```bash
@@ -137,6 +138,24 @@ curl --cacert cert.pem https://localhost:8443/api/posts
 
 With `TLS_CERT` and `TLS_KEY` set, the app terminates TLS itself — the handshake
 happens in the process, and the handler is the same one the plaintext path uses.
+
+## Concurrency, connections and sessions
+
+The server answers requests **at the same time** (mere v0.1.340). It used to answer one
+at a time, which was not a choice: `http_serve` is a sequential accept loop, so a
+handler doing a 50 ms query capped the whole process at 20 requests a second.
+
+Two things in this app were only correct *because* of that:
+
+- **one Postgres connection for the process.** Two requests interleaving on one socket
+  corrupt the wire protocol. Now each worker opens its own and never shares it — which
+  is what a connection pool is here, with no checkout, no return, and no way for a
+  failing handler to lose one.
+- **sessions in a process-local `Map`.** Concurrent writes to it lose entries, and
+  nothing reports that: the compiler does not classify `Map` as unshareable
+  (merelang/mere Q-080). They live in a `sessions` table now, which also means they
+  survive a restart and could be shared by more than one process. `verify.sh` checks
+  the restart, because a race is not something a gate can assert and a restart is.
 
 TLS is opt-in at the *source* level too, not just at runtime: `app.mere` imports
 `http/tls.mere`, and that import is what links OpenSSL (mere v0.1.339). A contrib/http

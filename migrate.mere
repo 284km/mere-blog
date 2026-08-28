@@ -23,11 +23,20 @@ import "config.mere";
 let schema_sql = fn () -> [
   "DROP TABLE IF EXISTS comments;",
   "DROP TABLE IF EXISTS posts;",
+  "DROP TABLE IF EXISTS sessions;",
   "DROP TABLE IF EXISTS users;",
   "CREATE TABLE users ( \
    id serial PRIMARY KEY, \
    username text UNIQUE NOT NULL, \
    pw_hash text NOT NULL, \
+   created_at timestamptz NOT NULL DEFAULT now() );",
+  // Sessions live here rather than in a process-local Map (see session_pg.mere):
+  // the server serves requests concurrently now, and a shared Map loses writes.
+  // ON DELETE CASCADE so removing a user removes their sessions -- the in-memory
+  // store had no such relationship to express.
+  "CREATE TABLE sessions ( \
+   sid text PRIMARY KEY, \
+   username text NOT NULL REFERENCES users(username) ON DELETE CASCADE, \
    created_at timestamptz NOT NULL DEFAULT now() );",
   "CREATE TABLE posts ( \
    id serial PRIMARY KEY, \

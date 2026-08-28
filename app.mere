@@ -25,26 +25,32 @@ import "http/http.mere";
 // this line is what links OpenSSL for the serving side. Without it the app
 // still builds and still serves -- plaintext.
 import "http/tls.mere";
+// The worker pool, and its own TLS module for the same opt-in reason.
+import "http/serve_mt.mere";
+import "http/serve_mt_tls.mere";
 import "http/router.mere";
 import "http/json_body.mere";
-import "http/session.mere";
+// Sessions in Postgres, not in a process-local Map: the server is concurrent
+// now and a shared Map loses writes. See session_pg.mere.
+import "session_pg.mere";
 // The rules the admin form checks before it submits. Same module, two
 // compilations: C here, Wasm in the browser client.
 import "validate.mere";
 
-// One connection for the process — the Node host is single-threaded, so a
-// single fd is enough for a demo (a pool would be the next step).
-//
-// The arguments used to be four literals on this line. See config.mere for
-// why, and for the one host where they still are.
-let fd = pg_connect db_host db_port db_user db_pass db_name;
-let _ = print ("pg: " ++ db_user ++ "@" ++ db_host ++ ":" ++ str_of_int db_port
-               ++ "/" ++ db_name);
-let _ = if fd < 1 then print "WARN: pg connect failed" else print "pg connected";
-
-// In-memory session store (sid -> username). Cleared on restart; a
-// sessions table would be the symmetric follow-up.
-let sessions = session_new_store ();
+// ONE CONNECTION PER WORKER, built by the worker and never shared. This used
+// to be a single process-wide `fd`, which was correct only because the accept
+// loop was sequential: two requests interleaving on one Postgres socket
+// corrupt the protocol. `http_serve_mt_ctx` calls this once per worker and
+// hands the result to every request that worker serves, so there is no shared
+// pool to check a connection out of -- and therefore no way for a handler that
+// fails to forget to give one back.
+let mk_conn = fn (i: int) ->
+  let c = pg_connect db_host db_port db_user db_pass db_name in
+  let _ =
+    if c < 1 then print_err ("worker " ++ str_of_int i ++ ": pg connect FAILED")
+    else print ("worker " ++ str_of_int i ++ ": pg " ++ db_user ++ "@" ++ db_host
+                ++ ":" ++ str_of_int db_port ++ "/" ++ db_name) in
+  c;
 
 // Password hashing. sha256_hex is a host extern (contrib/db uses it for
 // SCRAM). Demo-grade: a fixed pepper, no per-user salt or key stretching —
@@ -112,7 +118,7 @@ let _unauthorized = fn (u: unit) ->
 
 // --- auth handlers --------------------------------------------------------
 
-let signup_h = fn (req: str) ->
+let signup_h = fn (fd: int) -> fn (req: str) ->
   match (of_json_opt (http_current_body ()) : Credentials option) with
   | None -> let _ = http_set_status 400 in "username and password required\n"
   | Some creds ->
@@ -125,11 +131,11 @@ let signup_h = fn (req: str) ->
         match user_create fd creds.username (hash_pw creds.password) with
         | None -> let _ = http_set_status 500 in "signup failed\n"
         | Some u ->
-          let _ = session_login sessions u.username in
+          let _ = session_pg_login fd u.username in
           let _ = http_set_status 201 in json_ok (to_json (user_public u))
   ;
 
-let login_h = fn (req: str) ->
+let login_h = fn (fd: int) -> fn (req: str) ->
   match (of_json_opt (http_current_body ()) : Credentials option) with
   | None -> let _ = http_set_status 401 in "invalid credentials\n"
   | Some creds ->
@@ -137,18 +143,18 @@ let login_h = fn (req: str) ->
     | None -> let _ = http_set_status 401 in "invalid credentials\n"
     | Some u ->
       if str_eq u.pw_hash (hash_pw creds.password) then
-        let _ = session_login sessions u.username in json_ok (to_json (user_public u))
+        let _ = session_pg_login fd u.username in json_ok (to_json (user_public u))
       else
         let _ = http_set_status 401 in "invalid credentials\n"
   ;
 
-let logout_h = fn (req: str) ->
-  let _ = session_logout sessions in
+let logout_h = fn (fd: int) -> fn (req: str) ->
+  let _ = session_pg_logout fd in
   json_ok (to_json (OkResp { ok = true }))
   ;
 
-let me_h = fn (req: str) ->
-  let username = session_current sessions in
+let me_h = fn (fd: int) -> fn (req: str) ->
+  let username = session_pg_current fd in
   if str_eq username "" then _unauthorized ()
   else
     match user_find_by_name fd username with
@@ -158,11 +164,11 @@ let me_h = fn (req: str) ->
 
 // --- handlers -------------------------------------------------------------
 
-let posts_index_h = fn (req: str) ->
+let posts_index_h = fn (fd: int) -> fn (req: str) ->
   json_ok (to_json (posts_all fd))
   ;
 
-let post_show_h = fn (caps: str list) -> fn (req: str) ->
+let post_show_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
   let id = parse_int_or_zero (_first_cap caps) in
   match post_find fd id with
   | None -> let _ = http_set_status 404 in "post not found\n"
@@ -171,8 +177,8 @@ let post_show_h = fn (caps: str list) -> fn (req: str) ->
     json_ok (to_json (PostView { post = p, comments = cs }))
   ;
 
-let post_create_h = fn (req: str) ->
-  let user = session_current sessions in
+let post_create_h = fn (fd: int) -> fn (req: str) ->
+  let user = session_pg_current fd in
   if str_eq user "" then _unauthorized ()
   else
     match (of_json_opt (http_current_body ()) : NewPost option) with
@@ -186,7 +192,7 @@ let post_create_h = fn (req: str) ->
         | Some p -> let _ = http_set_status 201 in json_ok (to_json p)
   ;
 
-let comment_create_h = fn (caps: str list) -> fn (req: str) ->
+let comment_create_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
   let pid = parse_int_or_zero (_first_cap caps) in
   match (of_json_opt (http_current_body ()) : NewComment option) with
   | None -> let _ = http_set_status 400 in "author and body required\n"
@@ -202,8 +208,8 @@ let comment_create_h = fn (caps: str list) -> fn (req: str) ->
 // Update / delete require login AND ownership: only a post's own author
 // may mutate it. Look the post up first so we can compare authors and
 // distinguish 404 (no such post) from 403 (someone else's).
-let post_update_h = fn (caps: str list) -> fn (req: str) ->
-  let user = session_current sessions in
+let post_update_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
+  let user = session_pg_current fd in
   if str_eq user "" then _unauthorized ()
   else
     let id = parse_int_or_zero (_first_cap caps) in
@@ -224,8 +230,8 @@ let post_update_h = fn (caps: str list) -> fn (req: str) ->
         let _ = http_set_status 403 in "not your post\n"
   ;
 
-let post_delete_h = fn (caps: str list) -> fn (req: str) ->
-  let user = session_current sessions in
+let post_delete_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
+  let user = session_pg_current fd in
   if str_eq user "" then _unauthorized ()
   else
     let id = parse_int_or_zero (_first_cap caps) in
@@ -248,7 +254,7 @@ let rec _posts_html = fn (ps: Post list) -> fn (acc: str) ->
       (acc ++ "<li><b>" ++ p.title ++ "</b> — " ++ p.body ++ "</li>")
   ;
 
-let index_h = fn (req: str) ->
+let index_h = fn (fd: int) -> fn (req: str) ->
   let _ = http_set_content_type "text/html" in
   "<!doctype html><html><body><h1>mere-blog</h1><ul>"
     ++ _posts_html (posts_published fd) ""
@@ -258,45 +264,49 @@ let index_h = fn (req: str) ->
 // The admin client: one page, one Wasm module, one host glue. read_file
 // is binary-safe (a Mere str carries its length), so the .wasm goes out
 // through the same path as the HTML.
-let admin_page = fn (req: str) ->
+let admin_page = fn (fd: int) -> fn (req: str) ->
   let _ = http_set_content_type "text/html; charset=utf-8" in
   read_file "admin.html"
   ;
 
-let admin_wasm = fn (req: str) ->
+let admin_wasm = fn (fd: int) -> fn (req: str) ->
   let _ = http_set_content_type "application/wasm" in
   read_file "admin.wasm"
   ;
 
-let admin_glue = fn (req: str) ->
+let admin_glue = fn (fd: int) -> fn (req: str) ->
   let _ = http_set_content_type "application/javascript; charset=utf-8" in
   read_file ".mere_modules/dom/dom.glue.js"
   ;
 
-let not_found = fn (req: str) ->
+let not_found = fn (fd: int) -> fn (req: str) ->
   let _ = http_set_status 404 in "not found\n"
   ;
 
 // --- routes + serve -------------------------------------------------------
 
-let routes = [
-  route "GET" "/" index_h,
-  route "GET" "/admin" admin_page,
-  route "GET" "/admin.wasm" admin_wasm,
-  route "GET" "/dom.glue.js" admin_glue,
-  route "POST" "/api/signup" signup_h,
-  route "POST" "/api/login" login_h,
-  route "POST" "/api/logout" logout_h,
-  route "GET" "/api/me" me_h,
-  route "GET" "/api/posts" posts_index_h,
-  route_pattern "GET" "/api/posts/:id" post_show_h,
-  route "POST" "/api/posts" post_create_h,
-  route_pattern "PUT" "/api/posts/:id" post_update_h,
-  route_pattern "DELETE" "/api/posts/:id" post_delete_h,
-  route_pattern "POST" "/api/posts/:id/comments" comment_create_h
+// The table is built per request rather than once, because every handler now
+// needs the worker's connection and the router's handler type has no room for
+// it. Fourteen small allocations against a database round trip, all of them
+// reclaimed by the per-request arena.
+let routes = fn (fd: int) -> [
+  route "GET" "/" (index_h fd),
+  route "GET" "/admin" (admin_page fd),
+  route "GET" "/admin.wasm" (admin_wasm fd),
+  route "GET" "/dom.glue.js" (admin_glue fd),
+  route "POST" "/api/signup" (signup_h fd),
+  route "POST" "/api/login" (login_h fd),
+  route "POST" "/api/logout" (logout_h fd),
+  route "GET" "/api/me" (me_h fd),
+  route "GET" "/api/posts" (posts_index_h fd),
+  route_pattern "GET" "/api/posts/:id" (post_show_h fd),
+  route "POST" "/api/posts" (post_create_h fd),
+  route_pattern "PUT" "/api/posts/:id" (post_update_h fd),
+  route_pattern "DELETE" "/api/posts/:id" (post_delete_h fd),
+  route_pattern "POST" "/api/posts/:id/comments" (comment_create_h fd)
 ];
 
-let handle = router routes not_found;
+let handle = fn (fd: int) -> fn (req: str) -> router (routes fd) (not_found fd) req;
 
 // Serve TLS ourselves when we are given a certificate. Before mere v0.1.338
 // there was no `else` here to choose: a Mere program could dial a TLS
@@ -307,10 +317,11 @@ let handle = router routes not_found;
 let _ =
   if str_len tls_cert > 0 then
     let _ = print ("mere-blog serving https on :" ++ str_of_int http_port
-                   ++ " (cert " ++ tls_cert ++ ")") in
-    http_serve_tls http_port tls_cert tls_key handle
+                   ++ " (cert " ++ tls_cert ++ ", " ++ str_of_int http_workers
+                   ++ " workers)") in
+    http_serve_mt_ctx_tls http_port http_workers tls_cert tls_key mk_conn handle
   else
     let _ = print ("mere-blog serving http on :" ++ str_of_int http_port
                    ++ " (set TLS_CERT and TLS_KEY for https)") in
-    http_serve http_port handle;
+    http_serve_mt_ctx http_port http_workers mk_conn handle;
 0

@@ -231,6 +231,33 @@ in-process. `verify.sh` now passes the app a port that is deliberately **not** i
 default, so the configuration is checked by being used rather than asserted, and adds
 four TLS checks driven by curl without `-k`.
 
+## B7 🟢 The server answered one request at a time, and two bugs were hiding behind it
+
+`http_serve` is a sequential accept loop. Measured upstream: eight requests against a
+400 ms handler take **3.27 s**, not 0.4 s. Nothing here said so — this README described
+`serves :8080` and moved on — so "the app works" and "the app can serve anyone" were
+different claims and only the first had ever been checked.
+
+**Making it concurrent did not introduce two bugs; it revealed two.**
+
+- **One connection for the process.** The comment on that line said "a pool would be the
+  next step". It was not a missing optimisation: two requests interleaving on one
+  Postgres socket corrupt the protocol. It was correct only because the loop was
+  sequential.
+- **Sessions in a `Map`.** Concurrent SET/GET on a lock-free array lose writes. The
+  compiler does not catch it — `Map` is not classified as unshareable (mere Q-080) —
+  so this would have raced silently.
+
+Both are fixed by the same idea, and it is not a pool: `http_serve_mt_ctx` gives each
+worker its own context, built once by that worker and never shared. The number of
+connections is the number of workers by construction, there is no moment where a
+handler must give one back, and so a handler that fails cannot lose one. Sessions moved
+into a `sessions` table.
+
+**What the gate asserts is the restart, not the race.** A race is not something a check
+can state: log in, restart the server, present the same cookie. Only the database-backed
+store passes that, and it is the same change.
+
 ## The current compiler (M11)
 
 Building the admin UI meant compiling this app with a compiler newer than the
