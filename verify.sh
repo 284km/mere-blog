@@ -96,6 +96,19 @@ build migrate.mere migrate
 "$TMP/migrate" > "$TMP/migrate.out" 2>&1 || { echo "verify: migrate failed"; sed -n '1,5p' "$TMP/migrate.out"; exit 1; }
 grep -q "schema created" "$TMP/migrate.out" || { echo "verify: migrate did not create the schema"; cat "$TMP/migrate.out"; exit 1; }
 
+# RUNNING IT TWICE MUST BE A NO-OP. This file used to DROP every table and
+# recreate it, so a second run silently destroyed the database -- which is the
+# difference between "a schema" and "migrations", and nothing here had named it.
+# Checked before the app starts, so a failure here is unambiguous.
+"$TMP/migrate" > "$TMP/migrate2.out" 2>&1 || { echo "verify: the second migrate failed"; sed -n '1,5p' "$TMP/migrate2.out"; exit 1; }
+grep -q "schema created (0 applied)" "$TMP/migrate2.out" \
+  || { echo "verify: the second migrate re-applied something"; sed -n '1,8p' "$TMP/migrate2.out"; exit 1; }
+grep -q "already applied" "$TMP/migrate2.out" \
+  || { echo "verify: the second migrate did not recognise the applied version"; exit 1; }
+grep -q "posts already present" "$TMP/migrate2.out" \
+  || { echo "verify: the second migrate re-seeded (or lost) the data"; sed -n '1,8p' "$TMP/migrate2.out"; exit 1; }
+echo "verify: migrate is idempotent (second run applied 0, data intact)"
+
 build app.mere blog
 "$TMP/blog" > "$TMP/blog.log" 2>&1 &
 app_pid=$!

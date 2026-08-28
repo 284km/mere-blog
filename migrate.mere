@@ -20,11 +20,7 @@ import "config.mere";
 
 // DDL run as simple queries (no params). Order matters: comments -> posts
 // on drop (FK), posts -> comments on create.
-let schema_sql = fn () -> [
-  "DROP TABLE IF EXISTS comments;",
-  "DROP TABLE IF EXISTS posts;",
-  "DROP TABLE IF EXISTS sessions;",
-  "DROP TABLE IF EXISTS users;",
+let migration_1 = [
   "CREATE TABLE users ( \
    id serial PRIMARY KEY, \
    username text UNIQUE NOT NULL, \
@@ -71,17 +67,96 @@ let rec print_rows = fn (rows: (str option list) list) ->
     print_rows rest
   ;
 
+// ---- a migration runner (v0.1.340 arc) ---------------------------------
+//
+// This file used to DROP every table and recreate it. That is fine for a demo
+// that is always started from nothing and destroys the database of anyone who
+// runs it twice -- which is the difference between "a schema" and "migrations",
+// and the difference nothing here had ever named.
+//
+// The runner is the smallest thing that is honestly one: a `schema_migrations`
+// table, a numbered list, and applying only what is not there. Each version's
+// statements run and its number is recorded in the SAME transaction, so a
+// migration that fails halfway does not leave itself marked as applied.
+//
+// RESET IS NOW EXPLICIT. `migrate.mere --reset` drops everything first; without
+// it, running this twice is a no-op rather than data loss.
+
+let migrations = [
+  (1, migration_1)
+];
+
+let ensure_table = fn (fd: int) ->
+  pg_query fd "CREATE TABLE IF NOT EXISTS schema_migrations ( \
+                 version integer PRIMARY KEY, \
+                 applied_at timestamptz NOT NULL DEFAULT now() )";
+
+let is_applied = fn (fd: int) -> fn (v: int) ->
+  match pg_query_params fd "SELECT 1 FROM schema_migrations WHERE version = $1"
+          [Some (show v)] with
+  | Nil -> false
+  | Cons (_, _) -> true
+  ;
+
+let rec apply_each = fn (fd: int) -> fn (ms: (int * str list) list) -> fn (n: int) ->
+  match ms with
+  | Nil -> n
+  | Cons ((v, stmts), rest) ->
+    if is_applied fd v then
+      let _ = print ("  " ++ str_of_int v ++ " already applied") in
+      apply_each fd rest n
+    else
+      // The statements and the bookkeeping in one transaction: a migration that
+      // fails partway must not be recorded as done, or the next run skips it and
+      // the schema is silently wrong from then on.
+      let _ = pg_query fd "BEGIN" in
+      let _ = run_all fd stmts in
+      let _ = pg_query_params fd
+                "INSERT INTO schema_migrations (version) VALUES ($1)" [Some (show v)] in
+      let _ = pg_query fd "COMMIT" in
+      let _ = print ("  " ++ str_of_int v ++ " applied") in
+      apply_each fd rest (n + 1)
+  ;
+
+let reset_sql = [
+  "DROP TABLE IF EXISTS comments;",
+  "DROP TABLE IF EXISTS posts;",
+  "DROP TABLE IF EXISTS sessions;",
+  "DROP TABLE IF EXISTS users;",
+  "DROP TABLE IF EXISTS schema_migrations;"
+];
+
+let rec wants_reset = fn (a: str list) ->
+  match a with
+  | Nil -> false
+  | Cons (x, rest) -> if str_eq x "--reset" then true else wants_reset rest
+  ;
+
+let seed_if_empty = fn (fd: int) ->
+  match pg_query fd "SELECT 1 FROM posts LIMIT 1" with
+  | Cons (_, _) -> print "seed: posts already present, left alone"
+  | Nil ->
+    let _ = pg_query_params fd
+              "INSERT INTO posts (title, body, published) VALUES ($1, $2, $3)"
+              [Some "Hello Mere", Some "First post from Mere.", Some "true"] in
+    print "seed: one post"
+  ;
+
 let run = fn () ->
   let fd = pg_connect db_host db_port db_user db_pass db_name in
   if fd < 1 then print "connect failed"
   else
     let _ = print "connected" in
-    let _ = run_all fd (schema_sql ()) in
-    let _ = print "schema created" in
-    let _ = pg_query_params fd
-              "INSERT INTO posts (title, body, published) VALUES ($1, $2, $3)"
-              [Some "Hello Mere", Some "First post from Mere.", Some "true"] in
-    let _ = print "seeded" in
+    let _ = if wants_reset (args ()) then
+              let _ = run_all fd reset_sql in print "reset: dropped every table"
+            else () in
+    let _ = ensure_table fd in
+    let _ = print "migrations:" in
+    let applied = apply_each fd migrations 0 in
+    // The line verify.sh greps for. It says how many ran, so "nothing to do"
+    // and "everything ran" are different messages rather than the same one.
+    let _ = print ("schema created (" ++ str_of_int applied ++ " applied)") in
+    let _ = seed_if_empty fd in
     let rows = pg_query fd "SELECT id, title, published FROM posts ORDER BY id" in
     let _ = print "posts:" in
     let _ = print_rows rows in

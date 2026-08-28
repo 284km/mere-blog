@@ -283,6 +283,23 @@ never returns `pw_hash`.
 Still not constant-time: `str_eq` returns early. What leaks is a prefix of the derived
 key rather than the password, and Mere has no constant-time compare primitive.
 
+## B9 🟢 "The schema" was not migrations, and running it twice destroyed the database
+
+`migrate.mere` opened with `DROP TABLE IF EXISTS` for every table. On a fresh database
+that is indistinguishable from creating a schema; on a database with anything in it, it
+is data loss, silently, from a command named `migrate`.
+
+It is a runner now: a `schema_migrations` table, a numbered list, and applying only what
+is not already there. Each version's statements and its bookkeeping row go in the **same
+transaction**, so a migration that fails halfway is not recorded as applied -- otherwise
+the next run skips it and the schema is quietly wrong from then on. Dropping everything
+is still available and is now something you ask for: `migrate --reset`.
+
+**The check is running it twice**, which is the one thing the old file could not
+survive: the second run must report `0 applied`, must say the version is already
+applied, and must leave the seeded row alone. Three separate assertions rather than one,
+because "applied nothing" and "did nothing" and "kept the data" can fail apart.
+
 ## The current compiler (M11)
 
 Building the admin UI meant compiling this app with a compiler newer than the
