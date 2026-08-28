@@ -174,6 +174,38 @@ curl -s -b "$ck1" -c "$ck1" -X POST "$B/api/logout" >/dev/null
 r=$(curl -s -b "$ck1" "$B/api/me")
 case "$r" in *"login required"*) ok logout "the session is over" ;; *) bad logout "[$r]" ;; esac
 
+# --- the password hash is salted, and the salt is used ----------------------
+# THE CHECK THAT DISTINGUISHES SALTED FROM UNSALTED, which "login works" does
+# not: an unsalted hash logs in perfectly. Two users given the SAME password
+# must end up with DIFFERENT stored hashes. Read straight out of the table,
+# because the API deliberately never returns pw_hash.
+us1="dave$$"; us2="erin$$"
+curl -s -X POST "$B/api/signup" -d "{\"username\":\"$us1\",\"password\":\"same-password\"}" >/dev/null
+curl -s -X POST "$B/api/signup" -d "{\"username\":\"$us2\",\"password\":\"same-password\"}" >/dev/null
+h1=$(psql -h 127.0.0.1 -p "$PGPORT_APP" -U postgres -d blog -tAc \
+      "SELECT pw_hash FROM users WHERE username = '$us1'" 2>/dev/null)
+h2=$(psql -h 127.0.0.1 -p "$PGPORT_APP" -U postgres -d blog -tAc \
+      "SELECT pw_hash FROM users WHERE username = '$us2'" 2>/dev/null)
+if [ -z "$h1" ] || [ -z "$h2" ]; then
+  bad pw-salt "could not read the stored hashes back"
+elif [ "$h1" = "$h2" ]; then
+  bad pw-salt "two users with the same password share a hash -- it is not salted"
+else
+  ok pw-salt "the same password stores two different hashes"
+fi
+case "$h1" in
+  pbkdf2\$*) ok pw-kdf "stored as pbkdf2 with its iteration count" ;;
+  *) bad pw-kdf "unexpected hash format [$(printf '%s' "$h1" | cut -c1-24)]" ;;
+esac
+# And that verification actually re-derives: both must still be able to log in.
+ck4="$TMP/ck4"
+curl -s -c "$ck4" -X POST "$B/api/login" -d "{\"username\":\"$us2\",\"password\":\"same-password\"}" >/dev/null
+r=$(curl -s -b "$ck4" "$B/api/me")
+case "$r" in *"$us2"*) ok pw-verify "and a salted hash still verifies at login" ;;
+              *) bad pw-verify "[$r]" ;; esac
+c=$(code -X POST "$B/api/login" -d "{\"username\":\"$us2\",\"password\":\"wrong\"}")
+[ "$c" = 401 ] && ok pw-wrong "a wrong password is still refused" || bad pw-wrong "got $c"
+
 # --- sessions outlive the process (mere v0.1.340) ---------------------------
 # THE CHECK THAT ONLY THE DATABASE-BACKED STORE PASSES. The old store was a
 # process-local Map: correct-looking under a sequential server, lost on restart,

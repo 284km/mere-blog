@@ -258,6 +258,31 @@ into a `sessions` table.
 can state: log in, restart the server, present the same cookie. Only the database-backed
 store passes that, and it is the same change.
 
+## B8 🟢 The password hash was demo-grade partly because the server was sequential
+
+`sha256_hex ("mere-blog::pepper::" ++ p)` -- one pass, a fixed pepper, no per-user
+salt. The comment beside it said "demo-grade" and "a real app would use a slow salted
+KDF", which reads as a shortcut taken for convenience.
+
+**Part of it was the server.** PBKDF2-SHA256 costs about 1.13 us per iteration here
+(measured), so OWASP's current 600,000 is roughly 680 ms. Under the sequential accept
+loop that blocked *every other request in the process* -- so a slow hash was not merely
+inconvenient, it was unaffordable, and "demo-grade" was the only grade available. With
+workers it blocks one worker.
+
+Now: PBKDF2-SHA256, 16 random bytes of salt per user, and the iteration count stored
+alongside so raising it does not invalidate existing passwords. Format
+`pbkdf2$<iters>$<salt>$<dk>`.
+
+**The gate had to be chosen carefully, because "login works" does not distinguish a
+salted hash from an unsalted one** -- an unsalted hash logs in perfectly. What
+distinguishes them is two users with the *same* password: their stored hashes must
+differ. `verify.sh` reads them straight out of the table, because the API deliberately
+never returns `pw_hash`.
+
+Still not constant-time: `str_eq` returns early. What leaks is a prefix of the derived
+key rather than the password, and Mere has no constant-time compare primitive.
+
 ## The current compiler (M11)
 
 Building the admin UI meant compiling this app with a compiler newer than the

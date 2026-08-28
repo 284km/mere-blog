@@ -52,12 +52,46 @@ let mk_conn = fn (i: int) ->
                 ++ ":" ++ str_of_int db_port ++ "/" ++ db_name) in
   c;
 
-// Password hashing. sha256_hex is a host extern (contrib/db uses it for
-// SCRAM). Demo-grade: a fixed pepper, no per-user salt or key stretching —
-// a real app would use a slow salted KDF. Good enough to exercise the
-// signup/login/session flow.
-extern fn sha256_hex: str -> str;
-let hash_pw = fn (p: str) -> sha256_hex ("mere-blog::pepper::" ++ p);
+// Password hashing: PBKDF2-SHA256, per-user salt, iteration count stored with
+// the hash. This used to be `sha256_hex ("mere-blog::pepper::" ++ p)` -- one
+// pass, a fixed pepper, no salt -- with a comment calling it demo-grade.
+//
+// What made it demo-grade was partly the SERVER: under the sequential accept
+// loop a 680 ms key derivation blocked every other request in the process, so a
+// fast hash was not only convenient, it was the only affordable one. That is no
+// longer true (config.mere: pw_iters).
+//
+// STORED FORMAT: pbkdf2$<iters>$<salt_hex>$<derived_hex>. The iteration count
+// travels with the hash so raising `pw_iters` does not invalidate every
+// existing password -- old hashes keep verifying at the count they were made
+// with, and only get the new one when the password is next set.
+extern fn pbkdf2_sha256_hex: str -> str -> int -> int -> str;
+extern fn gen_request_id: unit -> str;
+
+let pw_dklen = 32;
+
+// 32 hex characters = 16 random bytes, from the same source session ids use.
+let new_salt = fn (u: unit) -> gen_request_id () ++ gen_request_id ();
+
+let hash_pw = fn (p: str) ->
+  let salt = new_salt () in
+  "pbkdf2$" ++ str_of_int pw_iters ++ "$" ++ salt ++ "$"
+    ++ pbkdf2_sha256_hex p salt pw_iters pw_dklen;
+
+// Verification re-derives with the STORED salt and iteration count, so it
+// cannot be done by hashing the input and comparing strings -- which is why the
+// login handler calls this rather than `str_eq stored (hash_pw given)`. With a
+// per-user salt that comparison would never match again, and a salted scheme
+// where login still passed would mean the salt was not being used.
+//
+// NOT CONSTANT TIME: `str_eq` returns early. It compares derived keys rather
+// than passwords, so what leaks is a prefix of the stored hash, not the secret;
+// a constant-time compare is the correct fix and Mere has no primitive for one.
+let pw_matches = fn (p: str) -> fn (stored: str) ->
+  match str_split stored "$" with
+  | Cons (_, Cons (iters, Cons (salt, Cons (dk, _)))) ->
+    str_eq dk (pbkdf2_sha256_hex p salt (int_of_str iters) pw_dklen)
+  | _ -> false;
 
 // --- JSON responses via `to_json` (mere v0.1.6) --------------------------
 //
@@ -142,7 +176,7 @@ let login_h = fn (fd: int) -> fn (req: str) ->
     match user_find_by_name fd creds.username with
     | None -> let _ = http_set_status 401 in "invalid credentials\n"
     | Some u ->
-      if str_eq u.pw_hash (hash_pw creds.password) then
+      if pw_matches creds.password u.pw_hash then
         let _ = session_pg_login fd u.username in json_ok (to_json (user_public u))
       else
         let _ = http_set_status 401 in "invalid credentials\n"

@@ -48,6 +48,17 @@ let http_port = env_int "PORT" 8080;
 // answer was always one and there was nothing to configure.
 let http_workers = env_int "HTTP_WORKERS" 8;
 
+// PBKDF2 iterations for password hashing. 600,000 is OWASP's current figure for
+// PBKDF2-SHA256, and it costs about 680 ms here -- measured at 1.13 us per
+// iteration on this machine, so raise it when the machine gets faster rather
+// than leaving a number that meant something in 2026.
+//
+// IT IS AFFORDABLE ONLY BECAUSE THE SERVER IS CONCURRENT. Under the sequential
+// accept loop a 680 ms login blocked every other request in the process, which
+// is a real reason a demo would have reached for a fast hash and called it
+// "demo-grade". With workers it blocks one of them.
+let pw_iters = env_int "PW_ITERS" 600000;
+
 // Set both to serve HTTPS directly. Empty means plaintext — which is still
 // the right answer behind a load balancer that terminates TLS for you; the
 // point is that it is now a choice rather than the only thing possible.
