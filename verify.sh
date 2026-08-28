@@ -277,6 +277,49 @@ done
   && ok session-workers "eight concurrent requests all see the session" \
   || bad session-workers "some worker did not see the session"
 
+# --- the database goes away and comes back ----------------------------------
+# MEASURED FIRST, WITH A REAL RESTART, and what it found was worse than an
+# outage: the app answered `GET /api/posts` with `[]` and a 200. The log said
+# "terminating connection due to administrator command" and the API said
+# success. A dead database looked like an empty one, which a client cannot tell
+# from the truth and a cache would happily store.
+#
+# Two things had to change. contrib/db's pg layer fails on a FATAL rather than
+# returning the rows it managed to read (none), and each worker holds its
+# connection in a slot it can replace, so a failure drops it and the next
+# request redials.
+#
+# The shape to expect: one failure per worker -- each discovers its own dead
+# connection once -- and then service. Not zero failures; a request already in
+# flight when the server went cannot be saved.
+pg_ctl -D "$pgdata" -o "-p $PGPORT_APP -k $pgdata -c listen_addresses=127.0.0.1" \
+  -w -l "$TMP/pg2.log" restart >/dev/null 2>&1 \
+  || { echo "verify: could not restart Postgres"; exit 1; }
+i=0
+until pg_isready -h 127.0.0.1 -p "$PGPORT_APP" -q 2>/dev/null; do
+  i=$((i + 1)); [ "$i" -gt 100 ] && { echo "verify: Postgres did not come back"; exit 1; }; sleep 0.1
+done
+
+fails=0; recovered=0; i=0
+while [ $i -lt 20 ]; do
+  c=$(code "$B/api/posts")
+  if [ "$c" = "200" ]; then recovered=1; break; fi
+  fails=$((fails + 1))
+  i=$((i + 1))
+done
+[ "$recovered" = "1" ] \
+  && ok db-recover "the app came back on its own after $fails failed requests" \
+  || bad db-recover "still failing 20 requests after Postgres returned"
+[ "$fails" -le "$HTTP_WORKERS" ] \
+  && ok db-recover-cost "and it cost at most one request per worker ($fails of $HTTP_WORKERS)" \
+  || bad db-recover-cost "$fails failures for $HTTP_WORKERS workers -- more than one each"
+
+# The content is back, not just the status: a 200 with an empty list is exactly
+# the failure this section exists to catch.
+r=$(curl -s "$B/api/posts")
+case "$r" in *'"title"'*) ok db-recover-rows "and the rows are really there" ;;
+              *) bad db-recover-rows "200 with no rows [$(printf '%s' "$r" | cut -c1-40)]" ;; esac
+
 # --- the app terminates TLS itself (mere v0.1.338) --------------------------
 # It used to serve cleartext, because a Mere program could dial a TLS
 # connection but not answer one. This restarts the same binary with a

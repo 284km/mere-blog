@@ -6,14 +6,14 @@ version = "0.0.1"
 # dogfood a typed model layer on top of contrib/db/pg. Deps are packages
 # in the Mere compiler monorepo (subdir), pinned to a release commit.
 [dependencies]
-http  = { git = "https://github.com/merelang/mere", subdir = "contrib/http",  rev = "96ab574ae060eebd8892ea1d76183af532beae11" }
-db    = { git = "https://github.com/merelang/mere", subdir = "contrib/db",    rev = "96ab574ae060eebd8892ea1d76183af532beae11" }
-orm   = { git = "https://github.com/merelang/mere", subdir = "contrib/orm",   rev = "96ab574ae060eebd8892ea1d76183af532beae11" }
+http  = { git = "https://github.com/merelang/mere", subdir = "contrib/http",  rev = "72e2f711db45454b78c0cc33079b98d17421e079" }
+db    = { git = "https://github.com/merelang/mere", subdir = "contrib/db",    rev = "72e2f711db45454b78c0cc33079b98d17421e079" }
+orm   = { git = "https://github.com/merelang/mere", subdir = "contrib/orm",   rev = "72e2f711db45454b78c0cc33079b98d17421e079" }
 # The admin UI: browser bindings, and a JSON parser for reading the
 # server's 422 body back into the same FieldError shape validate.mere
 # produced.
-dom   = { git = "https://github.com/merelang/mere", subdir = "contrib/dom",   rev = "96ab574ae060eebd8892ea1d76183af532beae11" }
-json  = { git = "https://github.com/merelang/mere", subdir = "contrib/json",  rev = "96ab574ae060eebd8892ea1d76183af532beae11" }
+dom   = { git = "https://github.com/merelang/mere", subdir = "contrib/dom",   rev = "72e2f711db45454b78c0cc33079b98d17421e079" }
+json  = { git = "https://github.com/merelang/mere", subdir = "contrib/json",  rev = "72e2f711db45454b78c0cc33079b98d17421e079" }
 
 # The Node runtime host (scripts + extern glue: http_serve, tcp_connect
 # for pg, …) that runs the compiled .wasm. `mere install` vendors it into
@@ -21,4 +21,4 @@ json  = { git = "https://github.com/merelang/mere", subdir = "contrib/json",  re
 # runs the wasm on that host.
 [host]
 git = "https://github.com/merelang/mere"
-rev = "96ab574ae060eebd8892ea1d76183af532beae11"
+rev = "72e2f711db45454b78c0cc33079b98d17421e079"

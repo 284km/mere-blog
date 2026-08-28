@@ -37,20 +37,44 @@ import "session_pg.mere";
 // compilations: C here, Wasm in the browser client.
 import "validate.mere";
 
-// ONE CONNECTION PER WORKER, built by the worker and never shared. This used
-// to be a single process-wide `fd`, which was correct only because the accept
-// loop was sequential: two requests interleaving on one Postgres socket
-// corrupt the protocol. `http_serve_mt_ctx` calls this once per worker and
-// hands the result to every request that worker serves, so there is no shared
-// pool to check a connection out of -- and therefore no way for a handler that
-// fails to forget to give one back.
-let mk_conn = fn (i: int) ->
+// ONE CONNECTION PER WORKER, AND A SLOT TO HOLD IT. This used to be a single
+// process-wide `fd`, which was correct only because the accept loop was
+// sequential: two requests interleaving on one Postgres socket corrupt the
+// protocol. `http_serve_*_ctx` calls this once per worker and hands the result
+// to every request that worker serves.
+//
+// THE CONTEXT IS THE SLOT, NOT THE DESCRIPTOR, so the connection can be
+// replaced. Measured with a Postgres restarted underneath a running server: the
+// worker's connection is dead for good, and before this the app answered every
+// request with a 500 until someone restarted it. A database that comes back
+// should bring the app back with it.
+extern fn mem_alloc: int -> int;
+extern fn mem_set_u32be: int -> int -> int -> int;
+extern fn mem_get_u32be: int -> int -> int;
+
+let dial = fn (i: int) ->
   let c = pg_connect db_host db_port db_user db_pass db_name in
   let _ =
     if c < 1 then print_err ("worker " ++ str_of_int i ++ ": pg connect FAILED")
     else print ("worker " ++ str_of_int i ++ ": pg " ++ db_user ++ "@" ++ db_host
                 ++ ":" ++ str_of_int db_port ++ "/" ++ db_name) in
   c;
+
+let mk_conn = fn (i: int) ->
+  let slot = mem_alloc 8 in
+  let _ = mem_set_u32be slot 0 (dial i) in
+  let _ = mem_set_u32be slot 4 i in
+  slot;
+
+// The worker's connection, redialled if it was dropped.
+let conn_of = fn (slot: int) ->
+  let fd = mem_get_u32be slot 0 in
+  if fd >= 1 then fd
+  else
+    let nfd = dial (mem_get_u32be slot 4) in
+    let _ = mem_set_u32be slot 0 nfd in
+    nfd;
+
 
 // Password hashing: PBKDF2-SHA256, per-user salt, iteration count stored with
 // the hash. This used to be `sha256_hex ("mere-blog::pepper::" ++ p)` -- one
@@ -340,7 +364,24 @@ let routes = fn (fd: int) -> [
   route_pattern "POST" "/api/posts/:id/comments" (comment_create_h fd)
 ];
 
-let handle = fn (fd: int) -> fn (req: str) -> router (routes fd) (not_found fd) req;
+// Not `with_rescue`, because this needs one thing more than a 500: it drops the
+// worker's connection so the next request redials. ANY failure drops it, not
+// only a connection failure -- a bad JSON body would too. That is deliberate
+// and conservative: redialling costs a handshake, and staying wedged costs the
+// site. The alternative is asking every failure what kind it was, through an
+// API that has one channel.
+let handle = fn (slot: int) -> fn (req: str) ->
+  let fd = conn_of slot in
+  match try_or (fn () -> Some (router (routes fd) (not_found fd) req)) None with
+  | Some body -> body
+  | None ->
+    let _ = mem_set_u32be slot 0 0 in
+    let _ = print_err ("handler failed for " ++ req
+                       ++ " -- dropping this worker's connection so the next "
+                       ++ "request redials") in
+    let _ = http_set_status 500 in
+    "internal server error\n"
+  ;
 
 // Serve TLS ourselves when we are given a certificate. Before mere v0.1.338
 // there was no `else` here to choose: a Mere program could dial a TLS
