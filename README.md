@@ -138,6 +138,10 @@ curl --cacert cert.pem https://localhost:8443/api/posts
 With `TLS_CERT` and `TLS_KEY` set, the app terminates TLS itself — the handshake
 happens in the process, and the handler is the same one the plaintext path uses.
 
+TLS is opt-in at the *source* level too, not just at runtime: `app.mere` imports
+`http/tls.mere`, and that import is what links OpenSSL (mere v0.1.339). A contrib/http
+program that never imports it builds with no OpenSSL at all.
+
 **Both of these are new, and both were compiler gaps rather than choices here.** Until
 mere v0.1.337 the C backend had no `env_var`, so a native binary genuinely could not be
 told anything at startup; the only way to change a deployment was to edit the source

@@ -21,6 +21,10 @@ import "db/pg.mere";
 import "config.mere";
 import "model.mere";
 import "http/http.mere";
+// TLS is opt-in by importing the module that declares it (mere v0.1.339):
+// this line is what links OpenSSL for the serving side. Without it the app
+// still builds and still serves -- plaintext.
+import "http/tls.mere";
 import "http/router.mere";
 import "http/json_body.mere";
 import "http/session.mere";
