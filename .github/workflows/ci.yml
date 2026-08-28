@@ -74,5 +74,20 @@ jobs:
       # v0.1.338: the API and a file route over a VERIFIED TLS connection, an
       # untrusted client refused, and the port/certificate arriving from the
       # environment.
+      # A BARE `wait` WAITS FOR THE SERVER TOO, and the server does not exit.
+      # verify.sh starts the app in the background; a `wait` with no arguments
+      # therefore hangs until GitHub cancels the job at sixty minutes -- with
+      # every check that had already passed going unreported. It happened, and it
+      # happened twice in one day: the compiler repo's own concurrency gate had
+      # the identical line hours earlier. Fixing an instance does not fix a
+      # pattern unless something looks for it.
+      - name: no bare `wait` (it would wait for the server)
+        run: |
+          if grep -rn '^[[:space:]]*wait[[:space:]]*$' verify.sh; then
+            echo "a bare wait: name the client PIDs instead (for p in \$pids; do wait \$p; done)"
+            exit 1
+          fi
+          echo "ok: no bare wait"
+
       - name: verify.sh — mere-blog over HTTP against Postgres
         run: MERE="$GITHUB_WORKSPACE/.mere-compiler/_build/default/bin/mere.exe" CC=clang sh verify.sh

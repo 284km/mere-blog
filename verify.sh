@@ -253,12 +253,21 @@ case "$r" in *"$u3"*) ok session-restart "the same cookie still works after a re
 # And that several workers agree about it: eight requests at once, each of which
 # may land on a different worker with its own database connection.
 conc_ok=1
-i=0
+i=0; mepids=""
 while [ $i -lt 8 ]; do
   ( curl -s -b "$ck3" "$B/api/me" > "$TMP/me$i" ) &
+  mepids="$mepids $!"
   i=$((i + 1))
 done
-wait
+# WAIT ON THE CLIENTS, NOT ON EVERY CHILD. A bare `wait` also waits for the app,
+# which never exits, so the job ran until GitHub cancelled it at sixty minutes --
+# every check above it had already passed and none of them were reported.
+#
+# This is the SECOND time today: scripts/http_concurrency_check.sh in the
+# compiler repo had the identical bug and was fixed hours earlier. Fixing the
+# instance did not fix the pattern, because nothing looks for it. A bare `wait`
+# in a script that starts a long-lived server is the shape.
+for p in $mepids; do wait "$p" 2>/dev/null || true; done
 i=0
 while [ $i -lt 8 ]; do
   grep -q "$u3" "$TMP/me$i" 2>/dev/null || conc_ok=0
