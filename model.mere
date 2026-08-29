@@ -96,13 +96,28 @@ let post_find = fn (fd: int) -> fn (id: int) ->
     [Some (show id)])
   ;
 
+// `slug` arrived with migration 2 as NOT NULL, and this statement did not name
+// it, so every create failed against a migrated database -- which is to say the
+// application stopped being able to post. The migration was written to survive
+// existing rows and nothing checked that new ones could still be written.
+//
+// The slug is derived the same way migration 2 derived it for the rows that
+// were already there, so a post made before and after the migration gets the
+// same shape of slug.
+let _slugify = fn (title: str) -> fn (fallback: str) ->
+  let t = to_lower (str_trim title) in
+  if str_eq t "" then fallback
+  else str_replace (str_replace (str_replace t " " "-") "/" "-") "?" ""
+  ;
+
 let post_create = fn (fd: int) -> fn (author: str) -> fn (title: str)
               -> fn (body: str) -> fn (published: bool) ->
   insert_returning post_of_row fd
-    ("INSERT INTO posts (author, title, body, published) VALUES ($1, $2, $3, $4) \
+    ("INSERT INTO posts (author, title, body, published, slug) VALUES ($1, $2, $3, $4, $5) \
       RETURNING " ++ _post_cols)
     [Some author, Some title, Some body,
-     Some (if published then "true" else "false")]
+     Some (if published then "true" else "false"),
+     Some (_slugify title "post")]
   ;
 
 let post_update = fn (fd: int) -> fn (id: int) -> fn (title: str)
