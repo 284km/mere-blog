@@ -6,14 +6,17 @@ version = "0.0.1"
 # dogfood a typed model layer on top of contrib/db/pg. Deps are packages
 # in the Mere compiler monorepo (subdir), pinned to a release commit.
 [dependencies]
-http  = { git = "https://github.com/merelang/mere", subdir = "contrib/http",  rev = "0307da00499255201c2ae089a450d97aca9b371f" }
-db    = { git = "https://github.com/merelang/mere", subdir = "contrib/db",    rev = "0307da00499255201c2ae089a450d97aca9b371f" }
-orm   = { git = "https://github.com/merelang/mere", subdir = "contrib/orm",   rev = "0307da00499255201c2ae089a450d97aca9b371f" }
+http  = { git = "https://github.com/merelang/mere", subdir = "contrib/http",  rev = "97e5ec6b8c559c668f75a441753867da8f313c87" }
+db    = { git = "https://github.com/merelang/mere", subdir = "contrib/db",    rev = "97e5ec6b8c559c668f75a441753867da8f313c87" }
+orm   = { git = "https://github.com/merelang/mere", subdir = "contrib/orm",   rev = "97e5ec6b8c559c668f75a441753867da8f313c87" }
 # The admin UI: browser bindings, and a JSON parser for reading the
 # server's 422 body back into the same FieldError shape validate.mere
 # produced.
-dom   = { git = "https://github.com/merelang/mere", subdir = "contrib/dom",   rev = "0307da00499255201c2ae089a450d97aca9b371f" }
-json  = { git = "https://github.com/merelang/mere", subdir = "contrib/json",  rev = "0307da00499255201c2ae089a450d97aca9b371f" }
+dom   = { git = "https://github.com/merelang/mere", subdir = "contrib/dom",   rev = "97e5ec6b8c559c668f75a441753867da8f313c87" }
+json  = { git = "https://github.com/merelang/mere", subdir = "contrib/json",  rev = "97e5ec6b8c559c668f75a441753867da8f313c87" }
+# The writing half of HTML. app.mere built its index by concatenating strings,
+# which is how a post title got into the page as markup.
+html  = { git = "https://github.com/merelang/mere", subdir = "contrib/html",  rev = "97e5ec6b8c559c668f75a441753867da8f313c87" }
 
 # The Node runtime host (scripts + extern glue: http_serve, tcp_connect
 # for pg, …) that runs the compiled .wasm. `mere install` vendors it into
@@ -21,4 +24,4 @@ json  = { git = "https://github.com/merelang/mere", subdir = "contrib/json",  re
 # runs the wasm on that host.
 [host]
 git = "https://github.com/merelang/mere"
-rev = "0307da00499255201c2ae089a450d97aca9b371f"
+rev = "97e5ec6b8c559c668f75a441753867da8f313c87"
