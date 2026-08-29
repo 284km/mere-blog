@@ -58,9 +58,23 @@ band() {
 a11y() { checks=$((checks + 1)); [ "$2" = ok ] || { echo "  FAIL $1"; fail=$((fail + 1)); }; }
 
 # ---- the client bundle ---------------------------------------------------
-"$MERE" -w admin.mere > "$tmp/admin.wat" 2>/dev/null && \
-  wat2wasm --enable-tail-call "$tmp/admin.wat" -o "$tmp/admin.wasm" 2>/dev/null \
-  || { echo "  FAIL admin.mere did not build"; fail=$((fail + 1)); }
+#
+# The tool has to be declared, not discovered. This used to try wat2wasm, send
+# its complaint to /dev/null, and skip the band when the file did not appear --
+# so on a machine without wabt the gate quietly measured six things instead of
+# seven and reported "only 6 checks ran" with no idea why. A missing tool is a
+# missing tool; it is not a smaller check.
+if ! command -v wat2wasm >/dev/null 2>&1; then
+  if [ -n "${CI:-}" ]; then
+    echo "budget: FAIL — wat2wasm is absent and CI is set: the client bundle cannot be measured"
+    exit 1
+  fi
+  echo "budget: SKIP (no wat2wasm)"; exit 0
+fi
+"$MERE" -w admin.mere > "$tmp/admin.wat" 2>"$tmp/adm.err" \
+  || { echo "  FAIL admin.mere did not emit Wasm"; head -2 "$tmp/adm.err"; fail=$((fail + 1)); }
+wat2wasm --enable-tail-call "$tmp/admin.wat" -o "$tmp/admin.wasm" 2>"$tmp/adm.wt" \
+  || { echo "  FAIL admin.wat did not assemble"; head -2 "$tmp/adm.wt"; fail=$((fail + 1)); }
 [ -f "$tmp/admin.wasm" ] && band "wasm_admin" "$(wc -c < "$tmp/admin.wasm" | tr -d ' ')"
 
 # ---- the documents the server sends --------------------------------------
