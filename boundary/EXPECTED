@@ -1,0 +1,15 @@
+# produced by boundary.sh
+#
+# What each shipped version puts on the wire. Recorded because the
+# accept/reject matrix cannot see a change both sides still tolerate.
+v1 payload : {"id":1,"author":"alice","title":"first","body":"b","published":true,"created_at":"2026-08-29T00:00:00Z"}
+v2 payload : {"id":1,"author":"alice","title":"first","body":"b","published":true,"created_at":"2026-08-29T00:00:00Z","slug":"first"}
+#
+# encoder -> decoder
+# fail = a client on the encoder version cannot read a server on the
+#        decoder version, which during a rolling deploy is every browser
+#        holding a cached admin.wasm
+v1 -> v1 : ok
+v1 -> v2 : fail
+v2 -> v1 : ok
+v2 -> v2 : ok
