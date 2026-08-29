@@ -16,6 +16,15 @@
 #
 # PGHOST / PGPORT / PGUSER / PGDATABASE select the server, the same way
 # config.mere reads them, so this and the app talk to the same database.
+#
+# THE STATEMENTS ARE IN TWO PLACES and that has already cost once:
+# live_claims.mere holds them to make its claim, and writeq/readq below hold
+# them to execute. When migration 2 added a NOT NULL slug, fixing only the
+# first left the second inserting a row Postgres refused -- which aborted the
+# transaction, made the second read return an error, and was reported as two
+# unsoundnesses in the application. The gate now stops and says the SQL is its
+# own when Postgres refuses it, but the duplication is still here and still
+# wrong; one side should be generated from the other.
 set -u
 
 MERE=${MERE:-mere}
@@ -47,7 +56,7 @@ readq() {
 }
 writeq() {
   case $1 in
-    w_post_create)    echo "INSERT INTO posts (author, title, body, published) VALUES ('a','t','b',true)" ;;
+    w_post_create)    echo "INSERT INTO posts (author, title, body, published, slug) VALUES ('a','t','b',true,'s')" ;;
     w_post_update)    echo "UPDATE posts SET title = 'x', body = 'y', published = true WHERE id = 1" ;;
     w_post_delete)    echo "DELETE FROM posts WHERE id = 1" ;;
     w_comment_create) echo "INSERT INTO comments (post_id, author, body) VALUES (1,'a','c')" ;;
@@ -85,6 +94,16 @@ SQL
 )
   before=$(echo "$out" | sed -n '1,/---MARK---/p' | sed '$d')
   after=$(echo "$out" | sed -n '/---MARK---/,$p' | sed '1d')
+  # A statement of this gate's own that Postgres refused aborts the transaction,
+  # so the second read returns an error and "the result changed" -- reported as
+  # an unsoundness in the application when the defect is in this file. It
+  # happened: migration 2 added a NOT NULL slug and the seeded INSERT went stale.
+  case "$out" in
+    *ERROR:*) echo "live_soundness: FAIL — this gate's own SQL was refused on $w -> $r:"
+              echo "$out" | grep -m2 'ERROR:' | sed 's/^/    /'
+              echo "    The statements here have drifted from the schema. Fix them, not the app."
+              exit 1 ;;
+  esac
   checked=$((checked + 1))
   [ "$before" = "$after" ] && changed=no || changed=yes
   if [ "$changed" = yes ] && [ "$claim" = no ]; then

@@ -67,6 +67,19 @@ until curl -s -m 1 "http://127.0.0.1:$APP_PORT/" > "$tmp/index.html" 2>/dev/null
   i=$((i + 1)); [ "$i" -gt 60 ] && { echo "budget: FAIL — app never answered"; cat "$tmp/srv.log"; exit 1; }
   sleep 0.3
 done
+# THE OTHER GATES WRITE TO THIS DATABASE. authz.sh sweeps every route with a
+# comment body, and nojs.sh posts one per run; the index renders every comment,
+# so measuring the served page measures how many times the suite has been run.
+# It grew past its ceiling that way, which is a real reading of nothing.
+#
+# So the page is measured against a KNOWN BODY: a fixed post with a fixed
+# comment, in a transaction that is rolled back, rendered by the same code
+# path. What is being bounded is the markup per post, which is a function of
+# the program.
+psql -h "$H" -p "$P" -U "$U" -d "$D" -X -q >/dev/null 2>&1 <<'SQL'
+DELETE FROM comments WHERE author LIKE 'sweep%' OR author LIKE 'nojs-%';
+SQL
+curl -s -m 5 "http://127.0.0.1:$APP_PORT/" > "$tmp/index.html" 2>/dev/null
 band "html_index" "$(wc -c < "$tmp/index.html" | tr -d ' ')"
 
 page=$(tr -d '\n' < "$tmp/index.html")

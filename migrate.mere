@@ -82,8 +82,27 @@ let rec print_rows = fn (rows: (str option list) list) ->
 // RESET IS NOW EXPLICIT. `migrate.mere --reset` drops everything first; without
 // it, running this twice is a no-op rather than data loss.
 
+// Every post gets a slug.
+//
+// WRITTEN FOR A TABLE THAT ALREADY HAS ROWS. The one-line version of this --
+// ALTER TABLE posts ADD COLUMN slug text NOT NULL -- is valid against zero rows
+// and impossible against any, so it passes on a fresh database and cannot be
+// applied to a real one. Migrations are normally tested on empty databases,
+// including by this repo's own verify.sh, which is the one input that cannot
+// fail.
+//
+// So: the column arrives nullable, every existing row is given a value, and
+// only then is the constraint imposed. An empty title still yields a slug,
+// because a post with no title is a row this has to convert rather than drop.
+let migration_2 = [
+  "ALTER TABLE posts ADD COLUMN slug text;",
+  "UPDATE posts SET slug = lower(regexp_replace(coalesce(nullif(title, ''), 'post-' || id), '[^a-zA-Z0-9]+', '-', 'g')) WHERE slug IS NULL;",
+  "ALTER TABLE posts ALTER COLUMN slug SET NOT NULL;"
+];
+
 let migrations = [
-  (1, migration_1)
+  (1, migration_1),
+  (2, migration_2)
 ];
 
 let ensure_table = fn (fd: int) ->
