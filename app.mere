@@ -178,6 +178,35 @@ let _unauthorized = fn (u: unit) ->
 
 // --- auth handlers --------------------------------------------------------
 
+// ---- the effect ledger ---------------------------------------------------
+//
+// Every write goes through `effect`, so it cannot happen without leaving the
+// principal it ran as behind. authz.sh sweeps every route with no credentials
+// and reads this back.
+//
+// A THIRD STATE, found by pointing the upstream gate at a real application.
+// That gate asserts the ledger stays EMPTY under an unauthenticated sweep,
+// which assumes no route may legitimately act for nobody. Anonymous commenting
+// is a normal thing for a blog to allow, and it is not a hole -- what makes it
+// safe is that it is DECLARED. So an effect records "anon" and the manifest
+// says which routes may produce one; an effect recording "anon" on a route
+// declared `guarded` is the bug.
+let ledger = vec_new ();
+
+let effect = fn (name: str) -> fn (who: str) ->
+  let _ = vec_push ledger (name ++ " " ++ (if str_eq who "" then "anon" else who)) in
+  ()
+  ;
+
+let rec _dump_ledger = fn (i: int) ->
+  if i >= vec_len ledger then "" else vec_get ledger i ++ "\n" ++ _dump_ledger (i + 1)
+  ;
+
+let ledger_h = fn (req: str) ->
+  let _ = http_set_content_type "text/plain" in
+  "count=" ++ show (vec_len ledger) ++ "\n" ++ _dump_ledger 0
+  ;
+
 let signup_h = fn (fd: int) -> fn (req: str) ->
   match (of_json_opt (http_current_body ()) : Credentials option) with
   | None -> let _ = http_set_status 400 in "username and password required\n"
@@ -188,6 +217,7 @@ let signup_h = fn (fd: int) -> fn (req: str) ->
       match user_find_by_name fd creds.username with
       | Some _ -> let _ = http_set_status 409 in "username taken\n"
       | None ->
+        let _ = effect "user_create" creds.username in
         match user_create fd creds.username (hash_pw creds.password) with
         | None -> let _ = http_set_status 500 in "signup failed\n"
         | Some u ->
@@ -203,6 +233,7 @@ let login_h = fn (fd: int) -> fn (req: str) ->
     | None -> let _ = http_set_status 401 in "invalid credentials\n"
     | Some u ->
       if pw_matches creds.password u.pw_hash then
+        let _ = effect "session_login" u.username in
         let _ = session_pg_login fd u.username in json_ok (to_json (user_public u))
       else
         let _ = http_set_status 401 in "invalid credentials\n"
@@ -247,6 +278,7 @@ let post_create_h = fn (fd: int) -> fn (req: str) ->
       match validate_post np.title np.body with
       | Cons (e, es) -> json_errors (Cons (e, es))
       | Nil ->
+        let _ = effect "post_create" user in
         match post_create fd user np.title np.body np.published with
         | None -> let _ = http_set_status 500 in "create failed\n"
         | Some p -> let _ = http_set_status 201 in json_ok (to_json p)
@@ -260,6 +292,7 @@ let comment_create_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
     match validate_comment nc.author nc.body with
     | Cons (e, es) -> json_errors (Cons (e, es))
     | Nil ->
+      let _ = effect "comment_create" (session_pg_current fd) in
       match comment_create fd pid nc.author nc.body with
       | None -> let _ = http_set_status 500 in "comment failed\n"
       | Some c -> let _ = http_set_status 201 in json_ok (to_json c)
@@ -283,7 +316,8 @@ let post_update_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
         if str_eq title "" then
           let _ = http_set_status 400 in "title required\n"
         else
-          (match post_update fd id title body published with
+          (let _ = effect "post_update" user in
+           match post_update fd id title body published with
            | None -> let _ = http_set_status 404 in "post not found\n"
            | Some p -> json_ok (to_json p))
       else
@@ -299,6 +333,7 @@ let post_delete_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
     | None -> let _ = http_set_status 404 in "post not found\n"
     | Some existing ->
       if str_eq existing.author user then
+        let _ = effect "post_delete" user in
         let _ = post_delete fd id in
         let _ = http_set_status 204 in ""
       else
@@ -380,6 +415,7 @@ let comment_form_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
     let _ = http_set_content_type "text/html" in
     _index_page fd (e.field ++ ": " ++ e.message)
   | Nil ->
+    let _ = effect "comment_form" (session_pg_current fd) in
     match comment_create fd pid author body with
     | None ->
       let _ = http_set_status 422 in
@@ -419,8 +455,59 @@ let not_found = fn (fd: int) -> fn (req: str) ->
 // needs the worker's connection and the router's handler type has no room for
 // it. Fourteen small allocations against a database round trip, all of them
 // reclaimed by the per-request arena.
+// The manifest authz.sh sweeps. It is NOT derived from the router: the
+// handlers have different shapes -- some take captures, some do not -- so one
+// list cannot build the other without a dispatch table that would itself be a
+// third place to forget a route.
+//
+// So the two lists are checked against each other instead. authz.sh asserts
+// that every route the manifest names answers, and that the manifest has as
+// many entries as the router has routes. A route added to one and not the
+// other fails the gate rather than quietly leaving a hole -- which is the
+// property that mattered, and it is worth having by checking rather than
+// claiming it by construction and being wrong.
+//
+// `Anon` is a DECLARATION, not a shrug: this route may perform an effect for
+// nobody. Commenting without an account is a choice this blog makes, and what
+// makes it safe is that it is written down and checked -- an effect recorded
+// as "anon" on a `Guarded` route is a defect.
+type acl = Guarded | Anon | ReadOnly;
+
+let route_specs = [
+  ("GET",    "/",                        ReadOnly),
+  ("GET",    "/admin",                   ReadOnly),
+  ("GET",    "/admin.wasm",              ReadOnly),
+  ("GET",    "/dom.glue.js",             ReadOnly),
+  ("POST",   "/api/signup",              Anon),
+  ("POST",   "/api/login",               Anon),
+  ("POST",   "/api/logout",              Anon),
+  ("GET",    "/api/me",                  ReadOnly),
+  ("GET",    "/api/posts",               ReadOnly),
+  ("GET",    "/api/posts/:id",           ReadOnly),
+  ("POST",   "/api/posts",               Guarded),
+  ("PUT",    "/api/posts/:id",           Guarded),
+  ("DELETE", "/api/posts/:id",           Guarded),
+  ("POST",   "/api/posts/:id/comments",  Anon),
+  ("POST",   "/posts/:id/comments",      Anon)
+];
+
+let _acl_name = fn (a: acl) ->
+  match a with Guarded -> "guarded" | Anon -> "anon" | ReadOnly -> "readonly";
+
+let rec _manifest = fn (ss) ->
+  match ss with
+  | Nil -> ""
+  | Cons ((m, path, a), rest) -> m ++ " " ++ path ++ " " ++ _acl_name a ++ "\n" ++ _manifest rest
+  ;
+
+let routes_manifest_h = fn (req: str) ->
+  let _ = http_set_content_type "text/plain" in _manifest route_specs
+  ;
+
 let routes = fn (fd: int) -> [
   route "GET" "/" (index_h fd),
+  route "GET" "/_routes" routes_manifest_h,
+  route "GET" "/_ledger" ledger_h,
   route "GET" "/admin" (admin_page fd),
   route "GET" "/admin.wasm" (admin_wasm fd),
   route "GET" "/dom.glue.js" (admin_glue fd),
