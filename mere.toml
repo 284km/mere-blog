@@ -6,17 +6,17 @@ version = "0.0.1"
 # dogfood a typed model layer on top of contrib/db/pg. Deps are packages
 # in the Mere compiler monorepo (subdir), pinned to a release commit.
 [dependencies]
-http  = { git = "https://github.com/merelang/mere", subdir = "contrib/http",  rev = "97e5ec6b8c559c668f75a441753867da8f313c87" }
-db    = { git = "https://github.com/merelang/mere", subdir = "contrib/db",    rev = "97e5ec6b8c559c668f75a441753867da8f313c87" }
-orm   = { git = "https://github.com/merelang/mere", subdir = "contrib/orm",   rev = "97e5ec6b8c559c668f75a441753867da8f313c87" }
+http  = { git = "https://github.com/merelang/mere", subdir = "contrib/http",  rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5" }
+db    = { git = "https://github.com/merelang/mere", subdir = "contrib/db",    rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5" }
+orm   = { git = "https://github.com/merelang/mere", subdir = "contrib/orm",   rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5" }
 # The admin UI: browser bindings, and a JSON parser for reading the
 # server's 422 body back into the same FieldError shape validate.mere
 # produced.
-dom   = { git = "https://github.com/merelang/mere", subdir = "contrib/dom",   rev = "97e5ec6b8c559c668f75a441753867da8f313c87" }
-json  = { git = "https://github.com/merelang/mere", subdir = "contrib/json",  rev = "97e5ec6b8c559c668f75a441753867da8f313c87" }
+dom   = { git = "https://github.com/merelang/mere", subdir = "contrib/dom",   rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5" }
+json  = { git = "https://github.com/merelang/mere", subdir = "contrib/json",  rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5" }
 # The writing half of HTML. app.mere built its index by concatenating strings,
 # which is how a post title got into the page as markup.
-html  = { git = "https://github.com/merelang/mere", subdir = "contrib/html",  rev = "97e5ec6b8c559c668f75a441753867da8f313c87" }
+html  = { git = "https://github.com/merelang/mere", subdir = "contrib/html",  rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5" }
 
 # The Node runtime host (scripts + extern glue: http_serve, tcp_connect
 # for pg, …) that runs the compiled .wasm. `mere install` vendors it into
@@ -24,4 +24,4 @@ html  = { git = "https://github.com/merelang/mere", subdir = "contrib/html",  re
 # runs the wasm on that host.
 [host]
 git = "https://github.com/merelang/mere"
-rev = "97e5ec6b8c559c668f75a441753867da8f313c87"
+rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5"

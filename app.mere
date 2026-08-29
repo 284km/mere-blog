@@ -29,6 +29,7 @@ import "http/tls.mere";
 import "http/serve_mt.mere";
 import "http/serve_mt_tls.mere";
 import "http/router.mere";
+import "http/mount.mere";
 import "http/json_body.mere";
 import "http/escape.mere";
 import "html/build.mere";
@@ -459,74 +460,44 @@ let not_found = fn (fd: int) -> fn (req: str) ->
 // needs the worker's connection and the router's handler type has no room for
 // it. Fourteen small allocations against a database round trip, all of them
 // reclaimed by the per-request arena.
-// The manifest authz.sh sweeps. It is NOT derived from the router: the
-// handlers have different shapes -- some take captures, some do not -- so one
-// list cannot build the other without a dispatch table that would itself be a
-// third place to forget a route.
+// ONE LIST. The router and the manifest authz.sh sweeps are two derivations of
+// it, so a route cannot be in one and missing from the other -- which it could
+// be until contrib/http/mount existed, and which is why authz.sh grew a check
+// comparing their counts. That check now has nothing to catch, and is kept
+// only because a gate that stops being able to fail should say so rather than
+// be deleted quietly.
 //
-// So the two lists are checked against each other instead. authz.sh asserts
-// that every route the manifest names answers, and that the manifest has as
-// many entries as the router has routes. A route added to one and not the
-// other fails the gate rather than quietly leaving a hole -- which is the
-// property that mattered, and it is worth having by checking rather than
-// claiming it by construction and being wrong.
-//
-// `Anon` is a DECLARATION, not a shrug: this route may perform an effect for
-// nobody. Commenting without an account is a choice this blog makes, and what
-// makes it safe is that it is written down and checked -- an effect recorded
-// as "anon" on a `Guarded` route is a defect.
-type acl = Guarded | Anon | ReadOnly;
-
-let route_specs = [
-  ("GET",    "/",                        ReadOnly),
-  ("GET",    "/admin",                   ReadOnly),
-  ("GET",    "/admin.wasm",              ReadOnly),
-  ("GET",    "/dom.glue.js",             ReadOnly),
-  ("POST",   "/api/signup",              Anon),
-  ("POST",   "/api/login",               Anon),
-  ("POST",   "/api/logout",              Anon),
-  ("GET",    "/api/me",                  ReadOnly),
-  ("GET",    "/api/posts",               ReadOnly),
-  ("GET",    "/api/posts/:id",           ReadOnly),
-  ("POST",   "/api/posts",               Guarded),
-  ("PUT",    "/api/posts/:id",           Guarded),
-  ("DELETE", "/api/posts/:id",           Guarded),
-  ("POST",   "/api/posts/:id/comments",  Anon),
-  ("POST",   "/posts/:id/comments",      Anon)
+// The acl is not optional. Anon is a DECLARATION: commenting without an
+// account is a choice this blog makes, and what makes it safe is that it is
+// written down here and swept for.
+let mounts = fn (fd: int) -> [
+  MExact   ("GET",    "/",                       ReadOnly, index_h fd),
+  MExact   ("GET",    "/_ledger",                ReadOnly, ledger_h),
+  MExact   ("GET",    "/admin",                  ReadOnly, admin_page fd),
+  MExact   ("GET",    "/admin.wasm",             ReadOnly, admin_wasm fd),
+  MExact   ("GET",    "/dom.glue.js",            ReadOnly, admin_glue fd),
+  MExact   ("POST",   "/api/signup",             Anon,     signup_h fd),
+  MExact   ("POST",   "/api/login",              Anon,     login_h fd),
+  MExact   ("POST",   "/api/logout",             Anon,     logout_h fd),
+  MExact   ("GET",    "/api/me",                 ReadOnly, me_h fd),
+  MExact   ("GET",    "/api/posts",              ReadOnly, posts_index_h fd),
+  MPattern ("GET",    "/api/posts/:id",          ReadOnly, post_show_h fd),
+  MExact   ("POST",   "/api/posts",              Guarded,  post_create_h fd),
+  MPattern ("PUT",    "/api/posts/:id",          Guarded,  post_update_h fd),
+  MPattern ("DELETE", "/api/posts/:id",          Guarded,  post_delete_h fd),
+  MPattern ("POST",   "/api/posts/:id/comments", Anon,     comment_create_h fd),
+  MPattern ("POST",   "/posts/:id/comments",     Anon,     comment_form_h fd)
 ];
 
-let _acl_name = fn (a: acl) ->
-  match a with Guarded -> "guarded" | Anon -> "anon" | ReadOnly -> "readonly";
-
-let rec _manifest = fn (ss) ->
-  match ss with
-  | Nil -> ""
-  | Cons ((m, path, a), rest) -> m ++ " " ++ path ++ " " ++ _acl_name a ++ "\n" ++ _manifest rest
+// Served from the same list it describes. Defined after `mounts` because it
+// reads it, and added to the router here rather than mounted, since a mount
+// that describes the manifest would have to appear in the manifest.
+let routes_manifest_h = fn (fd: int) -> fn (req: str) ->
+  let _ = http_set_content_type "text/plain" in manifest (mounts fd)
   ;
 
-let routes_manifest_h = fn (req: str) ->
-  let _ = http_set_content_type "text/plain" in _manifest route_specs
-  ;
-
-let routes = fn (fd: int) -> [
-  route "GET" "/" (index_h fd),
-  route "GET" "/_routes" routes_manifest_h,
-  route "GET" "/_ledger" ledger_h,
-  route "GET" "/admin" (admin_page fd),
-  route "GET" "/admin.wasm" (admin_wasm fd),
-  route "GET" "/dom.glue.js" (admin_glue fd),
-  route "POST" "/api/signup" (signup_h fd),
-  route "POST" "/api/login" (login_h fd),
-  route "POST" "/api/logout" (logout_h fd),
-  route "GET" "/api/me" (me_h fd),
-  route "GET" "/api/posts" (posts_index_h fd),
-  route_pattern "GET" "/api/posts/:id" (post_show_h fd),
-  route "POST" "/api/posts" (post_create_h fd),
-  route_pattern "PUT" "/api/posts/:id" (post_update_h fd),
-  route_pattern "DELETE" "/api/posts/:id" (post_delete_h fd),
-  route_pattern "POST" "/api/posts/:id/comments" (comment_create_h fd),
-  route_pattern "POST" "/posts/:id/comments" (comment_form_h fd)
-];
+let routes = fn (fd: int) ->
+  Cons (route "GET" "/_routes" (routes_manifest_h fd), entries (mounts fd));
 
 // Not `with_rescue`, because this needs one thing more than a 500: it drops the
 // worker's connection so the next request redials. ANY failure drops it, not

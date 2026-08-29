@@ -52,13 +52,28 @@ fail=0; checks=0
 bad() { echo "  FAIL $1"; fail=$((fail + 1)); }
 
 n_manifest=$(grep -c . "$tmp/routes")
-n_router=$(grep -cE '^  route(_pattern)? "' app.mere)
+n_mounts=$(grep -cE '^  M(Exact|Pattern) ' app.mere)
 checks=$((checks + 1))
 [ "${n_manifest:-0}" -ge 10 ] || bad "the manifest names ${n_manifest:-0} routes; the sweep would be nearly empty"
-# the router carries /_routes and /_ledger, which the manifest deliberately omits
+
+# THIS CHECK NO LONGER HAS A FAILURE TO FIND, and saying so is the point.
+#
+# Until contrib/http/mount, the router and the manifest were two hand-kept
+# lists, and a route added to one and not the other was a hole with nothing
+# watching it -- so this compared their counts and had real drift to catch.
+# They are now two derivations of one list and cannot disagree.
+#
+# What is left compares the mounts in the source against the manifest the
+# RUNNING app serves. That can only differ if the binary is stale, and this
+# gate rebuilds before it sweeps, so it cannot be. Poisoning it confirmed
+# that: adding a mount changed both numbers together and nothing failed.
+#
+# It is kept, counted, and labelled rather than deleted, because a gate that
+# stopped being able to fail is a fact about the code worth leaving visible.
+# A green line here means "these cannot drift", not "they were checked".
 checks=$((checks + 1))
-[ "$((n_router - 2))" -eq "$n_manifest" ] \
-  || bad "the router has $((n_router - 2)) application routes but the manifest names $n_manifest: one was added without the other"
+[ "${n_mounts:-0}" -eq "$n_manifest" ] \
+  || bad "app.mere declares $n_mounts mounts but the running app serves $n_manifest"
 
 # ---- sweep every route with no credentials -------------------------------
 while read -r method path acl; do
