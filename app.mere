@@ -314,7 +314,8 @@ let rec _posts_html = fn (ps: Post list) -> fn (acc: str) ->
 
 let index_h = fn (fd: int) -> fn (req: str) ->
   let _ = http_set_content_type "text/html" in
-  "<!doctype html><html><body><h1>mere-blog</h1><ul>"
+  "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+    ++ "<title>mere-blog</title></head><body><h1>mere-blog</h1><ul>"
     ++ _posts_html (posts_published fd) ""
     ++ "</ul></body></html>"
   ;
