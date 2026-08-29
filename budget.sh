@@ -100,11 +100,33 @@ done
 # comment, in a transaction that is rolled back, rendered by the same code
 # path. What is being bounded is the markup per post, which is a function of
 # the program.
+# THE PAGE IS MEASURED AGAINST A FIXED BODY, not against whatever is in the
+# database. Clearing the other gates' rows was not enough: my machine's database
+# has accumulated posts and CI's has the one row migrate seeds, so the same code
+# measured 1300-odd bytes here and 500 there and the floor -- correctly -- called
+# it a subject that had stopped being built. A band on a number that depends on
+# how much data happens to exist is a band on the data.
+#
+# So one post and one comment are inserted, measured, and rolled back out. What
+# is bounded is the markup per post, which is a function of the program.
 psql -h "$H" -p "$P" -U "$U" -d "$D" -X -q >/dev/null 2>&1 <<'SQL'
-DELETE FROM comments WHERE author LIKE 'sweep%' OR author LIKE 'nojs-%';
+DELETE FROM comments WHERE author LIKE 'sweep%' OR author LIKE 'nojs-%' OR author = 'budget-probe';
+DELETE FROM posts WHERE title = 'budget probe';
+INSERT INTO posts (author, title, body, published, slug)
+  VALUES ('budget-probe', 'budget probe', 'a body of a known length', true, 'budget-probe');
+INSERT INTO comments (post_id, author, body)
+  SELECT id, 'budget-probe', 'a comment of a known length' FROM posts WHERE title = 'budget probe';
 SQL
 curl -s -m 5 "http://127.0.0.1:$APP_PORT/" > "$tmp/index.html" 2>/dev/null
-band "html_index" "$(wc -c < "$tmp/index.html" | tr -d ' ')"
+probe_bytes=$(grep -o 'budget probe' "$tmp/index.html" | wc -l | tr -d ' ')
+[ "${probe_bytes:-0}" -ge 1 ] || { echo "budget: FAIL — the probe post is not on the page it is measuring"; exit 1; }
+# Measure only the probe's own <li>, so other rows in the database cannot move it.
+li=$(tr -d '\n' < "$tmp/index.html" | sed -n 's/.*\(<li><b>budget probe<\/b>.*budget-probe: a comment of a known length<\/li>\).*/\1/p' | head -1)
+band "html_post_markup" "$(printf '%s' "$li" | wc -c | tr -d ' ')"
+psql -h "$H" -p "$P" -U "$U" -d "$D" -X -q >/dev/null 2>&1 <<'SQL'
+DELETE FROM comments WHERE author = 'budget-probe';
+DELETE FROM posts WHERE title = 'budget probe';
+SQL
 
 page=$(tr -d '\n' < "$tmp/index.html")
 case "$page" in *"<html lang="*) r=ok ;; *) r=no ;; esac
