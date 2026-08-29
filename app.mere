@@ -30,6 +30,8 @@ import "http/serve_mt.mere";
 import "http/serve_mt_tls.mere";
 import "http/router.mere";
 import "http/json_body.mere";
+import "http/escape.mere";
+import "http/query.mere";
 // Sessions in Postgres, not in a process-local Map: the server is concurrent
 // now and a shared Map loses writes. See session_pg.mere.
 import "session_pg.mere";
@@ -303,21 +305,90 @@ let post_delete_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
         let _ = http_set_status 403 in "not your post\n"
   ;
 
-// A tiny HTML index so `GET /` is human-friendly (the Rails feel).
-let rec _posts_html = fn (ps: Post list) -> fn (acc: str) ->
+// The HTML index, and the half of this app that works with no JavaScript.
+//
+// The admin UI is a Wasm client that talks to /api/* with fetch, so with
+// scripting off there was nothing anyone could do here but read -- and until
+// this page grew a form, "the blog works without JS" was untested and untrue.
+// The API handlers are untouched; these are their scriptless twins, taking
+// application/x-www-form-urlencoded instead of JSON and answering 303 so a
+// reload does not resubmit.
+//
+// The interpolations are escaped. They were not before: a title containing a
+// tag was written into the page as markup.
+let rec _comments_html = fn (cs: Comment list) -> fn (acc: str) ->
+  match cs with
+  | Nil -> acc
+  | Cons (c, rest) ->
+    _comments_html rest
+      (acc ++ "<li>" ++ html_escape c.author ++ ": " ++ html_escape c.body ++ "</li>")
+  ;
+
+let _comment_form = fn (pid: int) ->
+  let a = "c-author-" ++ show pid in
+  let b = "c-body-" ++ show pid in
+  "<form method=\"POST\" action=\"/posts/" ++ show pid ++ "/comments\">"
+    ++ "<label for=\"" ++ a ++ "\">Name</label>"
+    ++ "<input type=\"text\" id=\"" ++ a ++ "\" name=\"author\" value=\"\">"
+    ++ "<label for=\"" ++ b ++ "\">Comment</label>"
+    ++ "<input type=\"text\" id=\"" ++ b ++ "\" name=\"body\" value=\"\">"
+    ++ "<button type=\"submit\">Post comment</button>"
+    ++ "</form>"
+  ;
+
+let rec _posts_html = fn (fd: int) -> fn (ps: Post list) -> fn (acc: str) ->
   match ps with
   | Nil -> acc
   | Cons (p, rest) ->
-    _posts_html rest
-      (acc ++ "<li><b>" ++ p.title ++ "</b> — " ++ p.body ++ "</li>")
+    _posts_html fd rest
+      (acc ++ "<li><b>" ++ html_escape p.title ++ "</b> — " ++ html_escape p.body
+           ++ "<ul>" ++ _comments_html (comments_for fd p.id) "" ++ "</ul>"
+           ++ _comment_form p.id ++ "</li>")
+  ;
+
+let _index_page = fn (fd: int) -> fn (flash: str) ->
+  "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+    ++ "<title>mere-blog</title></head><body><h1>mere-blog</h1>"
+    ++ (if str_eq flash "" then "" else "<p id=\"flash\">" ++ html_escape flash ++ "</p>")
+    ++ "<ul>"
+    ++ _posts_html fd (posts_published fd) ""
+    ++ "</ul></body></html>"
   ;
 
 let index_h = fn (fd: int) -> fn (req: str) ->
   let _ = http_set_content_type "text/html" in
-  "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-    ++ "<title>mere-blog</title></head><body><h1>mere-blog</h1><ul>"
-    ++ _posts_html (posts_published fd) ""
-    ++ "</ul></body></html>"
+  _index_page fd ""
+  ;
+
+// The form's own submission. Urlencoded, not JSON; 303 back to the page,
+// because with no script a reload resubmits a 200. A refusal is the page
+// again, with the reason on it, so there is somewhere to correct it.
+let rec _field = fn (k: str) -> fn (ps: (str * str) list) ->
+  match ps with
+  | Nil -> ""
+  | Cons ((n, v), rest) -> if str_eq n k then v else _field k rest
+  ;
+
+let comment_form_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
+  let pid = parse_int_or_zero (_first_cap caps) in
+  let ps = parse_query (http_current_body ()) in
+  let author = _field "author" ps in
+  let body = _field "body" ps in
+  match validate_comment author body with
+  | Cons (e, _) ->
+    let _ = http_set_status 422 in
+    let _ = http_set_content_type "text/html" in
+    _index_page fd (e.field ++ ": " ++ e.message)
+  | Nil ->
+    match comment_create fd pid author body with
+    | None ->
+      let _ = http_set_status 422 in
+      let _ = http_set_content_type "text/html" in
+      _index_page fd "no such post"
+    | Some _ ->
+      let _ = http_set_status 303 in
+      let _ = http_set_header "Location" "/" in
+      ""
   ;
 
 // The admin client: one page, one Wasm module, one host glue. read_file
@@ -362,7 +433,8 @@ let routes = fn (fd: int) -> [
   route "POST" "/api/posts" (post_create_h fd),
   route_pattern "PUT" "/api/posts/:id" (post_update_h fd),
   route_pattern "DELETE" "/api/posts/:id" (post_delete_h fd),
-  route_pattern "POST" "/api/posts/:id/comments" (comment_create_h fd)
+  route_pattern "POST" "/api/posts/:id/comments" (comment_create_h fd),
+  route_pattern "POST" "/posts/:id/comments" (comment_form_h fd)
 ];
 
 // Not `with_rescue`, because this needs one thing more than a 500: it drops the
