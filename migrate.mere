@@ -155,9 +155,16 @@ let seed_if_empty = fn (fd: int) ->
   match pg_query fd "SELECT 1 FROM posts LIMIT 1" with
   | Cons (_, _) -> print "seed: posts already present, left alone"
   | Nil ->
+    // `slug` is NOT NULL as of migration 2 and this INSERT did not name it, so
+    // seeding a fresh database failed and verify.sh's idempotence check --
+    // which reads the second run's output -- reported the data as re-seeded or
+    // lost. Adding the column to the schema and not to the statement that
+    // fills it is the same drift the boundary matrix exists to catch, one
+    // layer down.
     let _ = pg_query_params fd
-              "INSERT INTO posts (title, body, published) VALUES ($1, $2, $3)"
-              [Some "Hello Mere", Some "First post from Mere.", Some "true"] in
+              "INSERT INTO posts (author, title, body, published, slug) VALUES ($1, $2, $3, $4, $5)"
+              [Some "mere", Some "Hello Mere", Some "First post from Mere.",
+               Some "true", Some "hello-mere"] in
     print "seed: one post"
   ;
 

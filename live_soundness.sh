@@ -33,7 +33,17 @@ command -v "$MERE" >/dev/null 2>&1 || [ -x "$MERE" ] || { echo "live_soundness: 
 
 H=${PGHOST:-127.0.0.1}; P=${PGPORT:-15499}; U=${PGUSER:-postgres}; D=${PGDATABASE:-blog}
 psql -h "$H" -p "$P" -U "$U" -d "$D" -X -q -c "SELECT 1" >/dev/null 2>&1 \
-  || { echo "live_soundness: SKIP (no database at $H:$P/$D)"; exit 0; }
+  || {
+    # SKIP is for a developer without Postgres. In CI it is a lie: this ran
+    # green through a whole run where the database step had been skipped
+    # because verify.sh failed before it, so five gates reported success
+    # without touching their subject. CI sets the variable; there, absence of
+    # a database is a failure of the setup, not a reason to pass.
+    if [ -n "${CI:-}" ]; then
+      echo "live_soundness: FAIL — no database at $H:$P/$D, and CI is set: the setup did not run"
+      exit 1
+    fi
+    echo "live_soundness: SKIP (no database at $H:$P/$D)"; exit 0; }
 
 tmp=$(mktemp -d) || exit 1
 trap 'rm -rf "$tmp"' EXIT
