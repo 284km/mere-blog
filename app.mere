@@ -43,6 +43,7 @@ import "session_pg.mere";
 // The rules the admin form checks before it submits. Same module, two
 // compilations: C here, Wasm in the browser client.
 import "validate.mere";
+import "wire.mere";
 
 // ONE CONNECTION PER WORKER, AND A SLOT TO HOLD IT. This used to be a single
 // process-wide `fd`, which was correct only because the accept loop was
@@ -616,8 +617,35 @@ let routes = fn (fd: int) ->
 // and conservative: redialling costs a handshake, and staying wedged costs the
 // site. The alternative is asking every failure what kind it was, through an
 // API that has one channel.
+// THE WINDOW IS CHECKED BEFORE THE ROUTER, and only for /api. The HTML pages
+// and the scriptless comment form are reached by a browser that cannot add a
+// header, and a page that refuses to render because the wire moved would take
+// the site down for readers over a change to an API they never call.
+//
+// Only a DECLARED version is judged. An undeclared caller is served as before
+// -- see wire.mere for why that hole is real and why closing it is not
+// possible for builds that already exist.
+let _api_req = fn (req: str) -> str_starts_with req "GET /api" || str_starts_with req "POST /api"
+                             || str_starts_with req "PUT /api" || str_starts_with req "DELETE /api";
+
 let handle = fn (slot: int) -> fn (req: str) ->
   let fd = conn_of slot in
+  match (if _api_req req then wire_declared (http_get_header wire_header) else None) with
+  | Some v ->
+    if wire_in_window v then
+      (match try_or (fn () -> Some (router (routes fd) (not_found fd) req)) None with
+       | Some body -> body
+       | None ->
+         let _ = mem_set_u32be slot 0 0 in
+         let _ = http_set_status 500 in
+         "internal server error\n")
+    else
+      let _ = print_err ("wire: refused a client declaring " ++ show v
+                         ++ ", window is " ++ show wire_min ++ ".." ++ show wire_current) in
+      let _ = http_set_status 409 in
+      let _ = http_set_content_type "application/json" in
+      wire_conflict_body
+  | None ->
   match try_or (fn () -> Some (router (routes fd) (not_found fd) req)) None with
   | Some body -> body
   | None ->

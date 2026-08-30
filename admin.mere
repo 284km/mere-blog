@@ -23,6 +23,7 @@
 import "dom/dom.mere";
 import "json/json.mere";
 import "validate.mere";
+import "wire.mere";
 
 // ---- elements -------------------------------------------------------
 
@@ -129,11 +130,21 @@ let rec draw_posts = fn (xs) ->
 in
 
 let refresh = fn (u: unit) ->
+  let _ = dom_fetch_header wire_header (show wire_current) in
   dom_fetch_async "GET" "/api/posts" "" (fn (body: str) ->
     let _ = clear posts_el in
     match try_or (fn () -> Json.parse_json body) Json.JNull with
     | Json.JArr xs -> draw_posts xs
-    | _ -> dom_set_text status_el "could not read the post list")
+    | _ ->
+      // A RELOAD IS NOT DONE FOR THE USER. 409 means this cached build speaks
+      // a wire the server no longer serves, and the fix is to reload -- but a
+      // reload discards whatever is half-typed in the editor above. Losing an
+      // unsaved post to a deploy is a worse failure than the one being
+      // reported, so this says what happened and lets the person choose.
+      if dom_fetch_status () == 409 then
+        dom_set_text status_el
+          "this page was built for an older version of the server. Reload to continue -- anything unsaved here will be lost."
+      else dom_set_text status_el "could not read the post list")
 in
 
 // ---- JSON request bodies --------------------------------------------
@@ -169,6 +180,7 @@ let do_login = fn (u: unit) ->
     let payload = "\{" ++ jq "username" ++ ":" ++ jq name ++ ","
                        ++ jq "password" ++ ":" ++ jq pass ++ "}" in
     let _ = dom_fetch_header "Content-Type" "application/json" in
+    let _ = dom_fetch_header wire_header (show wire_current) in
     dom_fetch_async "POST" "/api/login" payload (fn (body: str) ->
       if dom_fetch_status () == 200 then
         let _ = dom_set_text status_el ("signed in as " ++ jfield (try_or (fn () -> Json.parse_json body) Json.JNull) "username") in
@@ -196,6 +208,7 @@ let do_compose = fn (u: unit) ->
                        ++ jq "body" ++ ":" ++ jq body ++ ","
                        ++ "\"published\":true}" in
     let _ = dom_fetch_header "Content-Type" "application/json" in
+    let _ = dom_fetch_header wire_header (show wire_current) in
     dom_fetch_async "POST" "/api/posts" payload (fn (resp: str) ->
       if dom_fetch_status () == 201 then
         let _ = dom_set_value title_in "" in

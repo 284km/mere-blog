@@ -145,6 +145,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: sh nojs.sh
 
+      - name: skew.sh — what the server does about a client from another deploy
+        if: ${{ !cancelled() }}
+        run: sh skew.sh
+
       - name: boundary.sh — every shipped shape of the API, crossed
         if: ${{ !cancelled() }}
         run: sh boundary.sh

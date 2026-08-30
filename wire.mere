@@ -1,0 +1,74 @@
+// wire.mere — the versions of this API a running server will speak, and what
+// happens to a client outside them.
+//
+// THE PROBLEM THIS ANSWERS (definition Q-4). admin.wasm is downloaded and
+// cached by a browser, so a client built last week calls this week's server on
+// every deploy. boundary.sh records which of those pairings work -- `v1 -> v2 :
+// fail` is in boundary/EXPECTED right now. What it does not say is what the
+// SERVER DOES about it, and the answer until this file was: nothing. The
+// client sent no version, the server read none, and the failure happened
+// entirely inside the browser's JSON decode. The server could not respond to
+// it, log it, or count it.
+//
+// THE FIRST DEPLOY OF A VERSION HEADER IS THE ONE IT CANNOT PROTECT, and that
+// is not a flaw in the design -- a build already sitting in a cache cannot be
+// made to declare anything. Clients from this build forward say which wire
+// they speak; the ones from before stay invisible, and are treated as they
+// were before. The window is a promise about the future, and the honest
+// version of that promise says so.
+//
+// WHY 409 AND NOT 426. RFC 2817's 426 Upgrade Required is defined for
+// switching protocol on the same connection and carries an `Upgrade` header
+// saying to what; there is nothing to switch to here. 409 Conflict is the
+// accurate one: the request is well-formed and the caller is authorised, and
+// what conflicts is the state of the caller's cached build with the state of
+// the server. The body says so in a form a program can read.
+
+let wire_current = 2;      // what this build's payloads are shaped like
+let wire_min = 1;          // the oldest this server still serves
+let wire_header = "X-Wire";
+
+// An out-of-window answer has to be distinguishable from every ordinary
+// failure, or a client that reloads on it reloads on ordinary failures too --
+// which turns one bug into an infinite loop. The `action` field is what makes
+// it distinguishable, and skew.sh asserts that a plain 4xx does not carry it.
+// `\{` because a bare `{` starts string interpolation in Mere.
+let wire_conflict_body =
+  "\{\"error\":\"wire out of window\",\"min\":" ++ show wire_min
+  ++ ",\"current\":" ++ show wire_current
+  ++ ",\"action\":\"reload\"}\n";
+
+// Nil means the caller declared nothing. That is not the same as declaring a
+// bad version: an undeclared caller may be a build from before this header
+// existed, a curl, or a monitor, and the server genuinely cannot tell which.
+// It is served as it was before, and skew.sh asserts that too -- a hole that
+// is written down and checked is different from one that is merely present.
+// A DIGIT SCANNER RATHER THAN AN IMPORT. `parse_int_or_zero` lives in
+// contrib/http/router, and importing it here put the whole router into
+// admin.wasm -- 4KB of routing in a client that routes nothing. budget.sh
+// caught it: wasm_admin 39024 -> 43133, over its ceiling. A header value is
+// digits or it is not a version.
+let rec _wire_digits = fn (s: str) -> fn (i: int) -> fn (acc: int) ->
+  if i >= str_len s then acc
+  else
+    let c = substring s i (i + 1) in
+    if str_eq c "0" then _wire_digits s (i + 1) (acc * 10)
+    else if str_eq c "1" then _wire_digits s (i + 1) (acc * 10 + 1)
+    else if str_eq c "2" then _wire_digits s (i + 1) (acc * 10 + 2)
+    else if str_eq c "3" then _wire_digits s (i + 1) (acc * 10 + 3)
+    else if str_eq c "4" then _wire_digits s (i + 1) (acc * 10 + 4)
+    else if str_eq c "5" then _wire_digits s (i + 1) (acc * 10 + 5)
+    else if str_eq c "6" then _wire_digits s (i + 1) (acc * 10 + 6)
+    else if str_eq c "7" then _wire_digits s (i + 1) (acc * 10 + 7)
+    else if str_eq c "8" then _wire_digits s (i + 1) (acc * 10 + 8)
+    else if str_eq c "9" then _wire_digits s (i + 1) (acc * 10 + 9)
+    else 0 - 1
+  ;
+
+let wire_declared = fn (raw: str) ->
+  let t = str_trim raw in
+  if str_eq t "" then None
+  else let n = _wire_digits t 0 0 in if n < 0 then Some (0 - 1) else Some n
+  ;
+
+let wire_in_window = fn (v: int) -> v >= wire_min && v <= wire_current;
