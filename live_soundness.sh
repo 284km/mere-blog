@@ -80,12 +80,40 @@ writeq() {
 # Rows the pairs need. Seeded inside the same rolled-back transaction as the
 # pair itself would be fragile, so they are put here once and the pairs roll
 # back over them.
-psql -h "$H" -p "$P" -U "$U" -d "$D" -X -q >/dev/null 2>&1 <<SQL
+#
+# THE SEED IS CHECKED, because when it fails this gate accuses its subject.
+# These inserts used to run under `>/dev/null 2>&1`, and they passed only
+# because migrate.mere's own seed had already put post 1 there -- `ON CONFLICT
+# DO NOTHING` turned the missing NOT NULL slug into a no-op instead of an
+# error. Delete the rows and the gate reports "2 unsound", which reads as a
+# defect in the application and is a defect in this file. A gate that can
+# blame the wrong party for its own broken setup is worse than one that skips.
+seed_err="$tmp/seed.err"
+psql -h "$H" -p "$P" -U "$U" -d "$D" -X -q -v ON_ERROR_STOP=1 >/dev/null 2>"$seed_err" <<SQL
 INSERT INTO users (username, pw_hash) VALUES ('alice','h') ON CONFLICT DO NOTHING;
 INSERT INTO sessions (sid, username) VALUES ('s1','alice') ON CONFLICT DO NOTHING;
-INSERT INTO posts (id, author, title, body, published) VALUES (1,'alice','seed','b',true) ON CONFLICT DO NOTHING;
+INSERT INTO posts (id, author, title, body, published, slug) VALUES (1,'alice','seed','b',true,'seed') ON CONFLICT DO NOTHING;
 INSERT INTO comments (post_id, author, body) VALUES (1,'alice','seed') ON CONFLICT DO NOTHING;
 SQL
+if [ -s "$seed_err" ]; then
+  echo "live_soundness: FAIL -- the gate's own seed did not apply, so the pairs below"
+  echo "  would be judged against rows that are not there. This is this file's bug,"
+  echo "  not the application's:"
+  sed 's/^/    /' "$seed_err" | head -5
+  exit 1
+fi
+
+# And the rows are confirmed present, because ON CONFLICT DO NOTHING makes a
+# seed that inserted nothing indistinguishable from one that inserted
+# everything. The pairs need post 1 and its comment to exist.
+have=$(psql -h "$H" -p "$P" -U "$U" -d "$D" -X -q -t -A -c \
+  "SELECT (SELECT count(*) FROM posts WHERE id = 1) || '/' || (SELECT count(*) FROM comments WHERE post_id = 1) || '/' || (SELECT count(*) FROM users WHERE username = 'alice') || '/' || (SELECT count(*) FROM sessions WHERE sid = 's1')")
+case "$have" in
+  1/*/1/1) ;;
+  *) echo "live_soundness: FAIL -- rows the pairs need are missing (posts1/comments1/alice/s1 = $have)"
+     echo "  Every pair would compare an empty read against an empty read."
+     exit 1 ;;
+esac
 
 unsound=0; wasteful=0; exact=0; checked=0
 : > "$tmp/report"
