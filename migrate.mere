@@ -14,40 +14,16 @@
 
 import "db/pg.mere";
 import "config.mere";
+import "sql.mere";
 
 // Connection settings: see config.mere. Defaults are what this file used to
 // hardcode, so nothing in the README needs an environment set.
 
-// DDL run as simple queries (no params). Order matters: comments -> posts
-// on drop (FK), posts -> comments on create.
-let migration_1 = [
-  "CREATE TABLE users ( \
-   id serial PRIMARY KEY, \
-   username text UNIQUE NOT NULL, \
-   pw_hash text NOT NULL, \
-   created_at timestamptz NOT NULL DEFAULT now() );",
-  // Sessions live here rather than in a process-local Map (see session_pg.mere):
-  // the server serves requests concurrently now, and a shared Map loses writes.
-  // ON DELETE CASCADE so removing a user removes their sessions -- the in-memory
-  // store had no such relationship to express.
-  "CREATE TABLE sessions ( \
-   sid text PRIMARY KEY, \
-   username text NOT NULL REFERENCES users(username) ON DELETE CASCADE, \
-   created_at timestamptz NOT NULL DEFAULT now() );",
-  "CREATE TABLE posts ( \
-   id serial PRIMARY KEY, \
-   author text NOT NULL DEFAULT '', \
-   title text NOT NULL, \
-   body text NOT NULL, \
-   published boolean NOT NULL DEFAULT false, \
-   created_at timestamptz NOT NULL DEFAULT now() );",
-  "CREATE TABLE comments ( \
-   id serial PRIMARY KEY, \
-   post_id integer NOT NULL REFERENCES posts(id) ON DELETE CASCADE, \
-   author text NOT NULL, \
-   body text NOT NULL, \
-   created_at timestamptz NOT NULL DEFAULT now() );"
-];
+// DDL run as simple queries (no params). The statements are in sql.mere,
+// because contrib/db/live reads the foreign keys out of the same text to
+// decide which reads a write makes stale -- a schema written twice would let
+// the migration and the derivation disagree about what cascades.
+let migration_1 = ddl_all;
 
 let rec run_all = fn (fd: int) -> fn (stmts: str list) ->
   match stmts with

@@ -57,3 +57,55 @@ let w_session_login =
   "INSERT INTO sessions (sid, username) VALUES ($1, $2)";
 let w_session_logout =
   "DELETE FROM sessions WHERE sid = $1";
+
+// --- the schema -----------------------------------------------------------
+//
+// THE FOREIGN KEYS ARE PART OF THE DERIVATION, so the DDL cannot be a copy
+// either. contrib/db/live reads `ON DELETE CASCADE` out of this text to answer
+// which reads a write makes stale, and a write that never names a table can
+// still empty it: deleting a post takes its comments. Measured in this app --
+// a client subscribed to `comments` kept rows that were gone -- before
+// live_channels_via existed to ask the question with the keys in it.
+//
+// migrate.mere runs these as migration 1, live_claims.mere derives the
+// cascades from them, and app.mere derives the live channels from the same
+// cascades. One text.
+let ddl_users =
+  "CREATE TABLE users ( \
+   id serial PRIMARY KEY, \
+   username text UNIQUE NOT NULL, \
+   pw_hash text NOT NULL, \
+   created_at timestamptz NOT NULL DEFAULT now() );";
+
+// Sessions live here rather than in a process-local Map (see session_pg.mere):
+// the server serves requests concurrently now, and a shared Map loses writes.
+// ON DELETE CASCADE so removing a user removes their sessions -- the in-memory
+// store had no such relationship to express.
+let ddl_sessions =
+  "CREATE TABLE sessions ( \
+   sid text PRIMARY KEY, \
+   username text NOT NULL REFERENCES users(username) ON DELETE CASCADE, \
+   created_at timestamptz NOT NULL DEFAULT now() );";
+
+let ddl_posts =
+  "CREATE TABLE posts ( \
+   id serial PRIMARY KEY, \
+   author text NOT NULL DEFAULT '', \
+   title text NOT NULL, \
+   body text NOT NULL, \
+   published boolean NOT NULL DEFAULT false, \
+   created_at timestamptz NOT NULL DEFAULT now() );";
+
+let ddl_comments =
+  "CREATE TABLE comments ( \
+   id serial PRIMARY KEY, \
+   post_id integer NOT NULL REFERENCES posts(id) ON DELETE CASCADE, \
+   author text NOT NULL, \
+   body text NOT NULL, \
+   created_at timestamptz NOT NULL DEFAULT now() );";
+
+// Order matters on create: posts before comments, users before sessions.
+let ddl_all = [ddl_users, ddl_sessions, ddl_posts, ddl_comments];
+
+// The same text as one string, for cascades_of to read.
+let ddl_text = ddl_users ++ " " ++ ddl_sessions ++ " " ++ ddl_posts ++ " " ++ ddl_comments;

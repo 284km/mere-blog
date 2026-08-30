@@ -133,6 +133,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: sh live_soundness.sh
 
+      - name: live_push.sh — the live loop over real sockets, cascade included
+        if: ${{ !cancelled() }}
+        run: sh live_push.sh
+
       - name: authz.sh — no effect runs as nobody
         if: ${{ !cancelled() }}
         run: sh authz.sh

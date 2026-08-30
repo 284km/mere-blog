@@ -52,20 +52,10 @@ let _bind = fn (name: str) -> fn (s: str) -> fn (vs) ->
   else out
   ;
 
-// The schema as migrate.mere writes it. Both cascades are here, and the second
-// one -- sessions.username -> users -- is not in the upstream fixture: deleting
-// a user takes their sessions with it, so a read of sessions goes stale from a
-// write that never names that table.
-//
-// `slug` is absent on purpose: cascades_of reads foreign keys, and a column
-// with no reference cannot produce one. Keeping the DDL minimal is what makes
-// that checkable — see the `cascades` line the gate compares.
-let ddl = "CREATE TABLE users (id serial PRIMARY KEY, username text UNIQUE NOT NULL, pw_hash text NOT NULL); \
-CREATE TABLE sessions (sid text PRIMARY KEY, username text NOT NULL REFERENCES users(username) ON DELETE CASCADE, created_at timestamptz NOT NULL DEFAULT now()); \
-CREATE TABLE posts (id serial PRIMARY KEY, author text NOT NULL, title text NOT NULL, body text NOT NULL, published boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now()); \
-CREATE TABLE comments (id serial PRIMARY KEY, post_id integer NOT NULL REFERENCES posts(id) ON DELETE CASCADE, author text NOT NULL, body text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());";
-
-let casc = cascades_of ddl;
+// The schema, from sql.mere -- the same text migrate.mere runs. It used to be
+// copied here with a note saying "as migrate.mere writes it", which is a
+// promise nothing checked; `slug` had already made the copies disagree once.
+let casc = cascades_of ddl_text;
 
 // The executable form of every statement, emitted for the gate to run. One
 // line each, `sql <name> <statement>`, so the shell reads the SQL out of the

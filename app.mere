@@ -34,6 +34,9 @@ import "http/json_body.mere";
 import "http/escape.mere";
 import "html/build.mere";
 import "http/query.mere";
+import "http/sse_native.mere";
+import "db/live.mere";
+import "sql.mere";
 // Sessions in Postgres, not in a process-local Map: the server is concurrent
 // now and a shared Map loses writes. See session_pg.mere.
 import "session_pg.mere";
@@ -270,6 +273,82 @@ let post_show_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
     json_ok (to_json (PostView { post = p, comments = cs }))
   ;
 
+// --- live push ------------------------------------------------------------
+//
+// WHICH SUBSCRIBERS A WRITE REACHES IS DERIVED FROM THE SQL, not decided here.
+// `live_channels` takes the statement the application is about to send and
+// answers which registered reads it makes stale; the app publishes to exactly
+// those. So a channel a browser subscribes to and a channel a write broadcasts
+// on cannot drift apart -- they are the same string, matched by contrib/db/live
+// against the statements in sql.mere.
+//
+// THE REGISTRY IS BUILT PER CALL, and that is not waste. `live_new` is a Vec,
+// which is neither Send nor Sync, and this app has eight workers: a registry
+// at module level would be captured by every one of them. The compiler refuses
+// that capture when it can see it and cannot see it through a function value
+// (Q-080 upstream), so the safe version is the one where nothing is shared.
+// Four `live_register` calls on a write is nothing next to the round trip the
+// write itself is making.
+let live_reads = [
+  ("posts",    r_posts_all),
+  ("post",     r_post_find),
+  ("comments", r_comments),
+  ("me",       r_user_byname)
+];
+
+let rec _register_all = fn (reg) -> fn (xs) ->
+  match xs with
+  | Nil -> reg
+  | Cons ((ch, sql), rest) ->
+    // A read live cannot derive is refused at registration and can then never
+    // be told it is stale. Refusing loudly beats a channel that silently never
+    // fires.
+    let _ = if live_register reg ch sql then ()
+            else print_err ("live: " ++ ch ++ " is not derivable and will never update") in
+    _register_all reg rest
+  ;
+
+let _live_reg = fn () -> _register_all (live_new ()) live_reads;
+
+// THE FOREIGN KEYS ARE IN THE QUESTION. `live_channels` asks `affects`, which
+// reads table names out of the statement -- and a DELETE of a post never names
+// `comments`, so a subscriber to the comments channel was told nothing while
+// its rows were deleted underneath it. Measured, not guessed: a client held a
+// list of comments that no longer existed.
+//
+// `live_channels_via` asks the same question with the cascades from the DDL, so
+// a write reaches every read it actually invalidates.
+let _casc = cascades_of ddl_text;
+
+let bus = sse_start ();
+
+let rec _publish_all = fn (chans) ->
+  match chans with
+  | Nil -> ()
+  | Cons (c, rest) -> let _ = sse_publish bus c "stale" in _publish_all rest
+  ;
+
+// Called after a write succeeds, with the statement that was sent.
+let live_notify = fn (write_sql: str) ->
+  _publish_all (live_channels_via _casc (_live_reg ()) write_sql);
+
+let rec _known_channel = fn (name: str) -> fn (xs) ->
+  match xs with
+  | Nil -> false
+  | Cons ((ch, _), rest) -> if str_eq ch name then true else _known_channel name rest
+  ;
+
+// The connection is taken out of the worker's hands here: http_hijack marks the
+// response as sent, so serve_mt neither writes nor closes, and the fd goes to
+// the broadcaster. The worker returns to accepting immediately -- a subscriber
+// does not cost a worker, which is what made this possible without the pool
+// size becoming the subscriber limit.
+let live_subscribe_h = fn (caps: str list) -> fn (req: str) ->
+  let ch = _first_cap caps in
+  if _known_channel ch live_reads then let _ = sse_subscribe bus ch in ""
+  else let _ = http_set_status 404 in "no such channel\n"
+  ;
+
 let post_create_h = fn (fd: int) -> fn (req: str) ->
   let user = session_pg_current fd in
   if str_eq user "" then _unauthorized ()
@@ -283,7 +362,10 @@ let post_create_h = fn (fd: int) -> fn (req: str) ->
         let _ = effect "post_create" user in
         match post_create fd user np.title np.body np.published with
         | None -> let _ = http_set_status 500 in "create failed\n"
-        | Some p -> let _ = http_set_status 201 in json_ok (to_json p)
+        | Some p ->
+          // The statement that was just sent, not a channel name written here.
+          let _ = live_notify w_post_create in
+          let _ = http_set_status 201 in json_ok (to_json p)
   ;
 
 let comment_create_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
@@ -297,7 +379,9 @@ let comment_create_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
       let _ = effect "comment_create" (session_pg_current fd) in
       match comment_create fd pid nc.author nc.body with
       | None -> let _ = http_set_status 500 in "comment failed\n"
-      | Some c -> let _ = http_set_status 201 in json_ok (to_json c)
+      | Some c ->
+        let _ = live_notify w_comment_create in
+        let _ = http_set_status 201 in json_ok (to_json c)
   ;
 
 // Update / delete require login AND ownership: only a post's own author
@@ -321,7 +405,7 @@ let post_update_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
           (let _ = effect "post_update" user in
            match post_update fd id title body published with
            | None -> let _ = http_set_status 404 in "post not found\n"
-           | Some p -> json_ok (to_json p))
+           | Some p -> let _ = live_notify w_post_update in json_ok (to_json p))
       else
         let _ = http_set_status 403 in "not your post\n"
   ;
@@ -337,6 +421,11 @@ let post_delete_h = fn (fd: int) -> fn (caps: str list) -> fn (req: str) ->
       if str_eq existing.author user then
         let _ = effect "post_delete" user in
         let _ = post_delete fd id in
+        // A delete of a post cascades to its comments, and live_channels_via
+        // knows because cascades_of read the keys out of the same DDL the
+        // migration runs -- so a subscriber to `comments` is told, from a
+        // statement that never names that table.
+        let _ = live_notify w_post_delete in
         let _ = http_set_status 204 in ""
       else
         let _ = http_set_status 403 in "not your post\n"
@@ -486,7 +575,8 @@ let mounts = fn (fd: int) -> [
   MPattern ("PUT",    "/api/posts/:id",          Guarded,  post_update_h fd),
   MPattern ("DELETE", "/api/posts/:id",          Guarded,  post_delete_h fd),
   MPattern ("POST",   "/api/posts/:id/comments", Anon,     comment_create_h fd),
-  MPattern ("POST",   "/posts/:id/comments",     Anon,     comment_form_h fd)
+  MPattern ("POST",   "/posts/:id/comments",     Anon,     comment_form_h fd),
+  MPattern ("GET",    "/live/:channel",          ReadOnly, live_subscribe_h)
 ];
 
 // Served from the same list it describes. Defined after `mounts` because it
