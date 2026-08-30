@@ -1,44 +1,65 @@
 // live_claims.mere — what contrib/db/live claims about THIS application's
 // statements, for this application's database to judge.
 //
-// The upstream gate checks the derivation against a schema written to exercise
-// it. This one takes the reads out of model.mere and session_pg.mere and the
-// schema out of migrate.mere, so what is being judged is the app, not a
-// fixture that was arranged to pass.
+// THE STATEMENTS ARE NOT HERE. They are in sql.mere, which is what model.mere
+// and session_pg.mere send, so a claim cannot be made about a statement the
+// app does not issue. They used to be copied here, and the copy went stale
+// when migration 2 added a NOT NULL slug.
 //
-// Prints "<write> <read> yes|no" per pair; live_soundness.sh executes both
-// against Postgres and compares the claim to what actually changed.
+// What IS here is the binding: the sample values that turn `$1` into something
+// Postgres can run. That is data for the gate, not a second set of statements
+// -- and it is printed alongside each claim, so live_soundness.sh executes
+// exactly the statement the claim was made about instead of holding a third
+// copy of it.
 import "db/live.mere";
-
-// The column lists model.mere builds its SELECTs from.
-let _post_cols = "id, author, title, body, published, created_at";
-let _comment_cols = "id, post_id, author, body, created_at";
-let _user_cols = "id, username, pw_hash";
+import "sql.mere";
 
 let reads = [
-  ("r_posts_all",   "SELECT " ++ _post_cols ++ " FROM posts ORDER BY id DESC"),
-  ("r_posts_pub",   "SELECT " ++ _post_cols ++ " FROM posts WHERE published = true ORDER BY id DESC"),
-  ("r_post_find",   "SELECT " ++ _post_cols ++ " FROM posts WHERE id = 1"),
-  ("r_comments",    "SELECT " ++ _comment_cols ++ " FROM comments WHERE post_id = 1 ORDER BY id"),
-  ("r_user_byname", "SELECT " ++ _user_cols ++ " FROM users WHERE username = 'alice'"),
-  ("r_session",     "SELECT username FROM sessions WHERE sid = 's1'")
+  ("r_posts_all",   r_posts_all,   Nil),
+  ("r_posts_pub",   r_posts_pub,   Nil),
+  ("r_post_find",   r_post_find,   ["1"]),
+  ("r_comments",    r_comments,    ["1"]),
+  ("r_user_byname", r_user_byname, ["'alice'"]),
+  ("r_session",     r_session,     ["'s1'"])
 ];
 
 let writes = [
-  ("w_post_create",    "INSERT INTO posts (author, title, body, published, slug) VALUES ('a','t','b',true,'s')"),
-  ("w_post_update",    "UPDATE posts SET title = 'x', body = 'y', published = true WHERE id = 1"),
-  ("w_post_delete",    "DELETE FROM posts WHERE id = 1"),
-  ("w_comment_create", "INSERT INTO comments (post_id, author, body) VALUES (1,'a','c')"),
-  ("w_user_create",    "INSERT INTO users (username, pw_hash) VALUES ('carol','h')"),
-  ("w_user_delete",    "DELETE FROM users WHERE username = 'alice'"),
-  ("w_session_login",  "INSERT INTO sessions (sid, username) VALUES ('s9','alice')"),
-  ("w_session_logout", "DELETE FROM sessions WHERE sid = 's1'")
+  ("w_post_create",    w_post_create,    ["'a'", "'t'", "'b'", "true", "'s'"]),
+  ("w_post_update",    w_post_update,    ["'x'", "'y'", "true", "1"]),
+  ("w_post_delete",    w_post_delete,    ["1"]),
+  ("w_comment_create", w_comment_create, ["1", "'a'", "'c'"]),
+  ("w_user_create",    w_user_create,    ["'carol'", "'h'"]),
+  ("w_user_delete",    w_user_delete,    ["'alice'"]),
+  ("w_session_login",  w_session_login,  ["'s9'", "'alice'"]),
+  ("w_session_logout", w_session_logout, ["'s1'"])
 ];
+
+// $1..$9 only; nothing here takes ten parameters, and a `$10` would be eaten
+// by the `$1` case. Checked rather than assumed: _bind fails loudly if a
+// placeholder is left behind.
+let rec _bind_at = fn (s: str) -> fn (n: int) -> fn (vs) ->
+  match vs with
+  | Nil -> s
+  | Cons (v, rest) -> _bind_at (str_replace s ("$" ++ show n) v) (n + 1) rest
+  ;
+
+let _bind = fn (name: str) -> fn (s: str) -> fn (vs) ->
+  let out = _bind_at s 1 vs in
+  if str_contains out "$" then
+    let _ = print_err ("live_claims: " ++ name ++ " still has a placeholder after "
+                       ++ "binding — the sample list is short: " ++ out) in
+    out
+  else out
+  ;
 
 // The schema as migrate.mere writes it. Both cascades are here, and the second
 // one -- sessions.username -> users -- is not in the upstream fixture: deleting
 // a user takes their sessions with it, so a read of sessions goes stale from a
 // write that never names that table.
+//
+// `slug` is absent on purpose: cascades_of reads foreign keys, and a column
+// with no reference cannot produce one. Keeping the DDL minimal is what makes
+// that checkable — see the `cascades` line the gate compares.
 let ddl = "CREATE TABLE users (id serial PRIMARY KEY, username text UNIQUE NOT NULL, pw_hash text NOT NULL); \
 CREATE TABLE sessions (sid text PRIMARY KEY, username text NOT NULL REFERENCES users(username) ON DELETE CASCADE, created_at timestamptz NOT NULL DEFAULT now()); \
 CREATE TABLE posts (id serial PRIMARY KEY, author text NOT NULL, title text NOT NULL, body text NOT NULL, published boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now()); \
@@ -46,10 +67,20 @@ CREATE TABLE comments (id serial PRIMARY KEY, post_id integer NOT NULL REFERENCE
 
 let casc = cascades_of ddl;
 
+// The executable form of every statement, emitted for the gate to run. One
+// line each, `sql <name> <statement>`, so the shell reads the SQL out of the
+// program instead of keeping its own.
+let rec emit_sql = fn (xs) ->
+  match xs with
+  | Nil -> ()
+  | Cons ((n, q, vs), rest) ->
+    let _ = print ("sql " ++ n ++ " " ++ _bind n q vs) in emit_sql rest
+  ;
+
 let rec each_read = fn (wn: str) -> fn (ws: str) -> fn (rs) ->
   match rs with
   | Nil -> ()
-  | Cons ((rn, rq), rest) ->
+  | Cons ((rn, rq, _), rest) ->
     let _ = print (wn ++ " " ++ rn ++ " " ++ (if affects_via casc ws rq then "yes" else "no")) in
     each_read wn ws rest
   ;
@@ -57,9 +88,11 @@ let rec each_read = fn (wn: str) -> fn (ws: str) -> fn (rs) ->
 let rec each_write = fn (ws) ->
   match ws with
   | Nil -> ()
-  | Cons ((wn, wq), rest) -> let _ = each_read wn wq reads in each_write rest
+  | Cons ((wn, wq, _), rest) -> let _ = each_read wn wq reads in each_write rest
   ;
 
 let _ = print ("cascades " ++ show casc) in
+let _ = emit_sql reads in
+let _ = emit_sql writes in
 let _ = each_write writes in
 print "claims: 48 pairs"

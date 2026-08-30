@@ -17,14 +17,17 @@
 # PGHOST / PGPORT / PGUSER / PGDATABASE select the server, the same way
 # config.mere reads them, so this and the app talk to the same database.
 #
-# THE STATEMENTS ARE IN TWO PLACES and that has already cost once:
-# live_claims.mere holds them to make its claim, and writeq/readq below hold
-# them to execute. When migration 2 added a NOT NULL slug, fixing only the
-# first left the second inserting a row Postgres refused -- which aborted the
-# transaction, made the second read return an error, and was reported as two
-# unsoundnesses in the application. The gate now stops and says the SQL is its
-# own when Postgres refuses it, but the duplication is still here and still
-# wrong; one side should be generated from the other.
+# THE STATEMENTS ARE IN ONE PLACE, and getting there is the point. They used to
+# be in three: sql.mere had none, model.mere and session_pg.mere sent them,
+# live_claims.mere copied them to make its claim, and this file copied them
+# again to execute it. When migration 2 added a NOT NULL slug, only the first
+# was fixed; the other two went stale and this gate reported the drift as two
+# unsoundnesses in the application.
+#
+# sql.mere now holds every statement, model.mere and session_pg.mere send those
+# strings, live_claims.mere claims about those strings and prints them bound to
+# sample values, and this file executes what it printed. A claim can no longer
+# be made about a statement the app does not issue.
 set -u
 
 MERE=${MERE:-mere}
@@ -53,30 +56,23 @@ trap 'rm -rf "$tmp"' EXIT
 pairs=$(grep -cE '^w_[a-z_]+ r_[a-z_]+ (yes|no)$' "$tmp/claims")
 [ "$pairs" -eq 48 ] || { echo "live_soundness: FAIL — $pairs claims, expected 48"; exit 1; }
 
-# The statements, held here in the order live_claims.mere holds them.
-readq() {
-  case $1 in
-    r_posts_all)   echo "SELECT id, author, title, body, published, created_at FROM posts ORDER BY id DESC" ;;
-    r_posts_pub)   echo "SELECT id, author, title, body, published, created_at FROM posts WHERE published = true ORDER BY id DESC" ;;
-    r_post_find)   echo "SELECT id, author, title, body, published, created_at FROM posts WHERE id = 1" ;;
-    r_comments)    echo "SELECT id, post_id, author, body, created_at FROM comments WHERE post_id = 1 ORDER BY id" ;;
-    r_user_byname) echo "SELECT id, username, pw_hash FROM users WHERE username = 'alice'" ;;
-    r_session)     echo "SELECT username FROM sessions WHERE sid = 's1'" ;;
-  esac
-}
-writeq() {
-  case $1 in
-    w_post_create)    echo "INSERT INTO posts (author, title, body, published, slug) VALUES ('a','t','b',true,'s')" ;;
-    w_post_update)    echo "UPDATE posts SET title = 'x', body = 'y', published = true WHERE id = 1" ;;
-    w_post_delete)    echo "DELETE FROM posts WHERE id = 1" ;;
-    w_comment_create) echo "INSERT INTO comments (post_id, author, body) VALUES (1,'a','c')" ;;
-    w_user_create)    echo "INSERT INTO users (username, pw_hash) VALUES ('carol','h')" ;;
-    w_user_delete)    echo "DELETE FROM users WHERE username = 'alice'" ;;
-    w_session_login)  echo "INSERT INTO sessions (sid, username) VALUES ('s9','alice')" ;;
-    w_session_logout) echo "DELETE FROM sessions WHERE sid = 's1'" ;;
-  esac
+# THE STATEMENTS COME FROM THE PROGRAM, not from here. They used to be copied
+# into two shell functions "held in the order live_claims.mere holds them",
+# which is a promise no one could check: when migration 2 added a NOT NULL
+# slug, the copies went stale and this gate reported the drift as unsoundness
+# in the application.
+#
+# live_claims.mere now prints `sql <name> <statement>` for every read and write
+# it makes a claim about, with its sample values already bound, so what runs
+# below is the statement the claim was about. sql.mere is the one place either
+# is written.
+sed -n 's/^sql \([a-z_0-9]*\) //p' "$tmp/claims" > /dev/null 2>&1
+stmt() {
+  sed -n "s/^sql $1 //p" "$tmp/claims" | head -1
 }
 
+# A name with no statement is drift, and drift must stop the gate rather than
+# quietly skip a pair -- `checked` would still reach 48 only if every pair ran.
 # Rows the pairs need. Seeded inside the same rolled-back transaction as the
 # pair itself would be fragile, so they are put here once and the pairs roll
 # back over them.
@@ -119,27 +115,44 @@ unsound=0; wasteful=0; exact=0; checked=0
 : > "$tmp/report"
 while read -r w r claim; do
   case "$w" in w_*) ;; *) continue ;; esac
-  rq=$(readq "$r"); wq=$(writeq "$w")
-  [ -n "$rq" ] && [ -n "$wq" ] || { echo "live_soundness: FAIL — unknown pair $w/$r (the lists have drifted)"; exit 1; }
-  out=$(psql -h "$H" -p "$P" -U "$U" -d "$D" -X -q -t -A <<SQL
+  rq=$(stmt "$r"); wq=$(stmt "$w")
+  [ -n "$rq" ] && [ -n "$wq" ] || { echo "live_soundness: FAIL — no statement emitted for $w or $r (live_claims.mere and this gate disagree about the names)"; exit 1; }
+  # `2>&1` IS THE WHOLE GUARD. psql writes ERROR: to stderr, and this captured
+  # stdout only, so the branch below -- written to stop this gate blaming the
+  # application for a statement Postgres refused -- never once fired. Poison
+  # the SQL and the gate reported "2 unsound" in the app, which is the exact
+  # misattribution the branch exists to prevent, and which the header of this
+  # file describes as having already happened.
+  out=$(psql -h "$H" -p "$P" -U "$U" -d "$D" -X -q -t -A 2>&1 <<SQL
 BEGIN;
 $rq;
 SELECT '---MARK---';
 $wq;
+SELECT '---MARK2---';
 $rq;
 ROLLBACK;
 SQL
 )
+  # TWO MARKS, because the statements are now the app's and the app's writes
+  # say RETURNING. With one mark those returned rows land inside the compared
+  # region and every pair reads as "changed" -- a gate that reports the write's
+  # own output as a stale read.
   before=$(echo "$out" | sed -n '1,/---MARK---/p' | sed '$d')
-  after=$(echo "$out" | sed -n '/---MARK---/,$p' | sed '1d')
+  after=$(echo "$out" | sed -n '/---MARK2---/,$p' | sed '1d')
   # A statement of this gate's own that Postgres refused aborts the transaction,
   # so the second read returns an error and "the result changed" -- reported as
   # an unsoundness in the application when the defect is in this file. It
   # happened: migration 2 added a NOT NULL slug and the seeded INSERT went stale.
+  # A refusal now means the APPLICATION's statement does not match the schema,
+  # because these are the strings sql.mere sends. That inverts what this branch
+  # used to say. It is also the migration-2 bug exactly: post_create stopped
+  # naming the NOT NULL slug and the app could not post, while this gate --
+  # holding its own copy without the slug either -- stayed green. Running the
+  # app's own SQL is what makes that visible from here.
   case "$out" in
-    *ERROR:*) echo "live_soundness: FAIL — this gate's own SQL was refused on $w -> $r:"
+    *ERROR:*) echo "live_soundness: FAIL — Postgres refused a statement the APPLICATION sends, on $w -> $r:"
               echo "$out" | grep -m2 'ERROR:' | sed 's/^/    /'
-              echo "    The statements here have drifted from the schema. Fix them, not the app."
+              echo "    This is sql.mere against the migrated schema. Fix the statement or the migration."
               exit 1 ;;
   esac
   checked=$((checked + 1))

@@ -1,0 +1,59 @@
+// sql.mere -- every statement this application sends, written once.
+//
+// WHY THIS FILE EXISTS. The same statements were in three places: model.mere
+// and session_pg.mere to execute them, live_claims.mere to make a claim about
+// them, and live_soundness.sh to execute that claim. Three copies of one rule
+// become three values, and this one already had: migration 2 added a NOT NULL
+// slug, model.mere was fixed, and the other two went stale -- one of them
+// silently, because its insert was guarded by ON CONFLICT DO NOTHING.
+//
+// live_soundness.sh's own header says it: "the duplication is still here and
+// still wrong; one side should be generated from the other." This is that
+// side. The gate now reads the statements out of the program that sends them.
+//
+// THE PLACEHOLDERS STAY. These are the statements as the application sends
+// them, `$1` and all, because that is what has to be true. The gate binds
+// sample values to execute them, and the binding is visible in
+// live_claims.mere rather than being a second set of statements that happen to
+// look similar.
+
+let post_cols = "id, author, title, body, published, created_at";
+let comment_cols = "id, post_id, author, body, created_at";
+let user_cols = "id, username, pw_hash";
+
+// --- reads ----------------------------------------------------------------
+
+let r_posts_all =
+  "SELECT " ++ post_cols ++ " FROM posts ORDER BY id DESC";
+let r_posts_pub =
+  "SELECT " ++ post_cols ++ " FROM posts WHERE published = true ORDER BY id DESC";
+let r_post_find =
+  "SELECT " ++ post_cols ++ " FROM posts WHERE id = $1";
+let r_comments =
+  "SELECT " ++ comment_cols ++ " FROM comments WHERE post_id = $1 ORDER BY id";
+let r_user_byname =
+  "SELECT " ++ user_cols ++ " FROM users WHERE username = $1";
+let r_session =
+  "SELECT username FROM sessions WHERE sid = $1";
+
+// --- writes ---------------------------------------------------------------
+
+let w_post_create =
+  "INSERT INTO posts (author, title, body, published, slug) \
+   VALUES ($1, $2, $3, $4, $5) RETURNING " ++ post_cols;
+let w_post_update =
+  "UPDATE posts SET title = $1, body = $2, published = $3 WHERE id = $4 \
+   RETURNING " ++ post_cols;
+let w_post_delete =
+  "DELETE FROM posts WHERE id = $1 RETURNING id";
+let w_comment_create =
+  "INSERT INTO comments (post_id, author, body) VALUES ($1, $2, $3) \
+   RETURNING " ++ comment_cols;
+let w_user_create =
+  "INSERT INTO users (username, pw_hash) VALUES ($1, $2) RETURNING " ++ user_cols;
+let w_user_delete =
+  "DELETE FROM users WHERE username = $1";
+let w_session_login =
+  "INSERT INTO sessions (sid, username) VALUES ($1, $2)";
+let w_session_logout =
+  "DELETE FROM sessions WHERE sid = $1";

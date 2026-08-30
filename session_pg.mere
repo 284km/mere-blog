@@ -20,6 +20,7 @@
 // connection, so nothing about sessions crosses a thread boundary either.
 import "db/pg.mere";
 import "http/cookie.mere";
+import "sql.mere";
 
 extern fn http_get_header: str -> str;
 extern fn http_set_header: str -> str -> unit;
@@ -34,7 +35,7 @@ let session_pg_current = fn (fd: int) ->
   let sid = session_id (http_get_header "Cookie") in
   if str_eq sid "" then ""
   else
-    match pg_query_params fd "SELECT username FROM sessions WHERE sid = $1" [Some sid] with
+    match pg_query_params fd r_session [Some sid] with
     | Nil -> ""
     | Cons (row, _) ->
       (match row with
@@ -45,7 +46,7 @@ let session_pg_current = fn (fd: int) ->
 let session_pg_login = fn (fd: int) -> fn (user: str) ->
   let sid = gen_request_id () in
   let _ = pg_query_params fd
-            "INSERT INTO sessions (sid, username) VALUES ($1, $2)"
+            w_session_login
             [Some sid, Some user] in
   let _ = http_set_header "Set-Cookie" (_sess_cookie sid) in
   sid
@@ -55,6 +56,6 @@ let session_pg_logout = fn (fd: int) ->
   let sid = session_id (http_get_header "Cookie") in
   let _ =
     if str_eq sid "" then Nil
-    else pg_query_params fd "DELETE FROM sessions WHERE sid = $1" [Some sid] in
+    else pg_query_params fd w_session_logout [Some sid] in
   http_set_header "Set-Cookie" "session=; Path=/; Max-Age=0"
   ;

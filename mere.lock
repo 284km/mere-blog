@@ -4,40 +4,40 @@
 name = "db"
 git = "https://github.com/merelang/mere"
 subdir = "contrib/db"
-rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5"
+rev = "bf671a8362b677c4e52bca076f735f154c878b8a"
 hash = "md5:43b0cc3670b29fa02254c675a397ccac"
 
 [[package]]
 name = "dom"
 git = "https://github.com/merelang/mere"
 subdir = "contrib/dom"
-rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5"
+rev = "bf671a8362b677c4e52bca076f735f154c878b8a"
 hash = "md5:10083f4b0341226fa0bd2334ab3ed0e0"
 
 [[package]]
 name = "html"
 git = "https://github.com/merelang/mere"
 subdir = "contrib/html"
-rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5"
-hash = "md5:e3a9b2f3b2fc4500ab136b939464d981"
+rev = "bf671a8362b677c4e52bca076f735f154c878b8a"
+hash = "md5:eb7676147096142b48312cf94ab3f20c"
 
 [[package]]
 name = "http"
 git = "https://github.com/merelang/mere"
 subdir = "contrib/http"
-rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5"
-hash = "md5:2f6c73d2023b7456aced93d9e619e470"
+rev = "bf671a8362b677c4e52bca076f735f154c878b8a"
+hash = "md5:4a21e730e2ab454330437fba9498f0fb"
 
 [[package]]
 name = "json"
 git = "https://github.com/merelang/mere"
 subdir = "contrib/json"
-rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5"
+rev = "bf671a8362b677c4e52bca076f735f154c878b8a"
 hash = "md5:e6bd531a2ab67efe2bd2259f5bd5ca43"
 
 [[package]]
 name = "orm"
 git = "https://github.com/merelang/mere"
 subdir = "contrib/orm"
-rev = "f7e0f3eb6f686d29af87d00f2c854f0259ea28e5"
+rev = "bf671a8362b677c4e52bca076f735f154c878b8a"
 hash = "md5:779c300b65d0709bdce976f8ac2c112c"

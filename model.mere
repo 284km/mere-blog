@@ -6,6 +6,7 @@
 
 import "db/pg.mere";
 import "orm/orm.mere";
+import "sql.mere";
 
 // pg query glue: run a parameterized query and decode each row with a
 // contrib/orm builder. (The decode/encode combinators themselves live in
@@ -73,26 +74,27 @@ let comment_of_row = fn (row: str option list) ->
             body = body, created_at = created_at }
   ;
 
-let _post_cols = "id, author, title, body, published, created_at";
-let _comment_cols = "id, post_id, author, body, created_at";
-let _user_cols = "id, username, pw_hash";
+// The column lists and the statements live in sql.mere, so the gate that
+// judges them reads the same strings this file sends.
+let _post_cols = post_cols;
+let _comment_cols = comment_cols;
+let _user_cols = user_cols;
 
 // --- Post queries ---------------------------------------------------------
 
 let posts_all = fn (fd: int) ->
   query_as post_of_row fd
-    ("SELECT " ++ _post_cols ++ " FROM posts ORDER BY id DESC") Nil
+    r_posts_all Nil
   ;
 
 let posts_published = fn (fd: int) ->
   query_as post_of_row fd
-    ("SELECT " ++ _post_cols ++ " FROM posts WHERE published = true ORDER BY id DESC")
-    Nil
+    r_posts_pub Nil
   ;
 
 let post_find = fn (fd: int) -> fn (id: int) ->
   Orm.head_opt (query_as post_of_row fd
-    ("SELECT " ++ _post_cols ++ " FROM posts WHERE id = $1")
+    r_post_find
     [Some (show id)])
   ;
 
@@ -113,8 +115,7 @@ let _slugify = fn (title: str) -> fn (fallback: str) ->
 let post_create = fn (fd: int) -> fn (author: str) -> fn (title: str)
               -> fn (body: str) -> fn (published: bool) ->
   insert_returning post_of_row fd
-    ("INSERT INTO posts (author, title, body, published, slug) VALUES ($1, $2, $3, $4, $5) \
-      RETURNING " ++ _post_cols)
+    w_post_create
     [Some author, Some title, Some body,
      Some (if published then "true" else "false"),
      Some (_slugify title "post")]
@@ -123,8 +124,7 @@ let post_create = fn (fd: int) -> fn (author: str) -> fn (title: str)
 let post_update = fn (fd: int) -> fn (id: int) -> fn (title: str)
               -> fn (body: str) -> fn (published: bool) ->
   insert_returning post_of_row fd
-    ("UPDATE posts SET title = $1, body = $2, published = $3 WHERE id = $4 \
-      RETURNING " ++ _post_cols)
+    w_post_update
     [Some title, Some body,
      Some (if published then "true" else "false"), Some (show id)]
   ;
@@ -132,7 +132,7 @@ let post_update = fn (fd: int) -> fn (id: int) -> fn (title: str)
 // Returns true if a row was deleted (RETURNING id yields one row), false
 // if no post had that id.
 let post_delete = fn (fd: int) -> fn (id: int) ->
-  match pg_query_params fd "DELETE FROM posts WHERE id = $1 RETURNING id"
+  match pg_query_params fd w_post_delete
           [Some (show id)] with
   | Nil -> false
   | Cons (_, _) -> true
@@ -142,15 +142,14 @@ let post_delete = fn (fd: int) -> fn (id: int) ->
 
 let comments_for = fn (fd: int) -> fn (post_id: int) ->
   query_as comment_of_row fd
-    ("SELECT " ++ _comment_cols ++ " FROM comments WHERE post_id = $1 ORDER BY id")
+    r_comments
     [Some (show post_id)]
   ;
 
 let comment_create = fn (fd: int) -> fn (post_id: int) -> fn (author: str)
                  -> fn (body: str) ->
   insert_returning comment_of_row fd
-    ("INSERT INTO comments (post_id, author, body) VALUES ($1, $2, $3) \
-      RETURNING " ++ _comment_cols)
+    w_comment_create
     [Some (show post_id), Some author, Some body]
   ;
 
@@ -158,13 +157,12 @@ let comment_create = fn (fd: int) -> fn (post_id: int) -> fn (author: str)
 
 let user_find_by_name = fn (fd: int) -> fn (username: str) ->
   Orm.head_opt (query_as user_of_row fd
-    ("SELECT " ++ _user_cols ++ " FROM users WHERE username = $1")
+    r_user_byname
     [Some username])
   ;
 
 let user_create = fn (fd: int) -> fn (username: str) -> fn (pw_hash: str) ->
   insert_returning user_of_row fd
-    ("INSERT INTO users (username, pw_hash) VALUES ($1, $2) \
-      RETURNING " ++ _user_cols)
+    w_user_create
     [Some username, Some pw_hash]
   ;
