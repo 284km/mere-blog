@@ -320,6 +320,27 @@ let _live_reg = fn () -> _register_all (live_new ()) live_reads;
 // a write reaches every read it actually invalidates.
 let _casc = cascades_of ddl_text;
 
+// AND THE SCHEMA IS ASKED WHETHER IT CAN BE SPOKEN ABOUT AT ALL. A trigger
+// body is arbitrary and a view hides the table a read really touches, so
+// either one lets a write change a read through a path `live_channels_via`
+// does not model -- it would answer confidently and wrongly, and a subscriber
+// would hold rows that are gone.
+//
+// This schema has neither today. The check is here so that the day one arrives
+// the server says so on the way up, rather than the live channels quietly
+// becoming decoration.
+let rec _warn_unmodelled = fn (xs: str list) ->
+  match xs with
+  | Nil -> ()
+  | Cons (x, rest) ->
+    let _ = print_err ("live: this schema contains " ++ x ++ ", which the live "
+                       ++ "derivation cannot follow. Writes reaching a read "
+                       ++ "through it will not wake its subscribers.") in
+    _warn_unmodelled rest
+  ;
+
+let _ = _warn_unmodelled (schema_unmodelled ddl_text);
+
 let bus = sse_start ();
 
 let rec _publish_all = fn (chans) ->
