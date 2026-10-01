@@ -197,20 +197,48 @@ let _unauthorized = fn (u: unit) ->
 // safe is that it is DECLARED. So an effect records "anon" and the manifest
 // says which routes may produce one; an effect recording "anon" on a route
 // declared `guarded` is the bug.
-let ledger = vec_new ();
+//
+// ONE THREAD OWNS IT. It was a top-level Vec that every worker pushed to --
+// eight of them by default (HTTP_WORKERS), with `/_ledger` reading it at the
+// same time -- and a Vec is not safe to share: the same shape run alone (eight
+// threads, 20,000 pushes each) kept 159,123 of 160,000 entries. The compiler
+// accepted it because the push happens inside `effect`, a named function, and a
+// function's type does not say what it touches (Mere's Q-179). Now the Vec
+// lives inside one thread and the workers send it messages, the shape mkv uses
+// for its store: an append is a message, and a read sends a channel for the
+// answer to come back on. A channel is first-in first-out, so a read that
+// follows a request's effects sees them.
+type ledger_msg =
+  | LAppend of str
+  | LDump of Channel[str];
 
-let effect = fn (name: str) -> fn (who: str) ->
-  let _ = vec_push ledger (name ++ " " ++ (if str_eq who "" then "anon" else who)) in
-  ()
+let ledger_inbox = channel_new ();
+
+let rec _ledger_dump = fn (v: Vec['r, str]) -> fn (i: int) ->
+  if i >= vec_len v then "" else vec_get v i ++ "\n" ++ _ledger_dump v (i + 1)
   ;
 
-let rec _dump_ledger = fn (i: int) ->
-  if i >= vec_len ledger then "" else vec_get ledger i ++ "\n" ++ _dump_ledger (i + 1)
+let rec _ledger_loop = fn (v: Vec['r, str]) ->
+  let _ =
+    match channel_recv ledger_inbox with
+    | LAppend line -> vec_push v line
+    | LDump reply ->
+      channel_send reply ("count=" ++ show (vec_len v) ++ "\n" ++ _ledger_dump v 0)
+  in
+  _ledger_loop v
+  ;
+
+let _ledger_owner = detach (spawn (fn () -> _ledger_loop (vec_new ())));
+
+let effect = fn (name: str) -> fn (who: str) ->
+  channel_send ledger_inbox (LAppend (name ++ " " ++ (if str_eq who "" then "anon" else who)))
   ;
 
 let ledger_h = fn (req: str) ->
   let _ = http_set_content_type "text/plain" in
-  "count=" ++ show (vec_len ledger) ++ "\n" ++ _dump_ledger 0
+  let reply = channel_new () in
+  let _ = channel_send ledger_inbox (LDump reply) in
+  channel_recv reply
   ;
 
 let signup_h = fn (fd: int) -> fn (req: str) ->
