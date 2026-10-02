@@ -208,6 +208,14 @@ let _unauthorized = fn (u: unit) ->
 // for its store: an append is a message, and a read sends a channel for the
 // answer to come back on. A channel is first-in first-out, so a read that
 // follows a request's effects sees them.
+//
+// AND THE READER IS TOLD WHO ANSWERS. A request reading the ledger waits on its
+// reply channel for the owner thread; if that thread had failed, the request
+// waited for good -- a thread's failure no longer ends the program (Mere
+// v0.1.586), and a channel did not know who would send on it. The owner is
+// registered as the reply channel's sender (`channel_sender`, Mere v0.1.601),
+// so the read fails naming the owner's failure instead of hanging a worker.
+// That is also why the handle is kept rather than detached.
 type ledger_msg =
   | LAppend of str
   | LDump of Channel[str];
@@ -228,7 +236,7 @@ let rec _ledger_loop = fn (v: Vec['r, str]) ->
   _ledger_loop v
   ;
 
-let _ledger_owner = detach (spawn (fn () -> _ledger_loop (vec_new ())));
+let _ledger_owner = spawn (fn () -> _ledger_loop (vec_new ()));
 
 let effect = fn (name: str) -> fn (who: str) ->
   channel_send ledger_inbox (LAppend (name ++ " " ++ (if str_eq who "" then "anon" else who)))
@@ -237,6 +245,7 @@ let effect = fn (name: str) -> fn (who: str) ->
 let ledger_h = fn (req: str) ->
   let _ = http_set_content_type "text/plain" in
   let reply = channel_new () in
+  let _ = channel_sender reply _ledger_owner in
   let _ = channel_send ledger_inbox (LDump reply) in
   channel_recv reply
   ;
